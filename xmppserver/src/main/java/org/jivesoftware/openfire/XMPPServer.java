@@ -49,6 +49,7 @@ import org.dom4j.io.SAXReader;
 import org.jivesoftware.database.DbConnectionManager;
 import org.jivesoftware.database.JNDIDataSourceProvider;
 import org.jivesoftware.openfire.admin.AdminManager;
+import org.jivesoftware.openfire.archive.ArchiveManager;
 import org.jivesoftware.openfire.audit.AuditManager;
 import org.jivesoftware.openfire.audit.spi.AuditManagerImpl;
 import org.jivesoftware.openfire.auth.AuthFactory;
@@ -106,8 +107,8 @@ import org.jivesoftware.openfire.sasl.AnonymousSaslServer;
 import org.jivesoftware.openfire.security.SecurityAuditManager;
 import org.jivesoftware.openfire.session.ConnectionSettings;
 import org.jivesoftware.openfire.session.RemoteSessionLocator;
-import org.jivesoftware.openfire.session.SoftwareVersionManager;
 import org.jivesoftware.openfire.session.SoftwareServerVersionManager;
+import org.jivesoftware.openfire.session.SoftwareVersionManager;
 import org.jivesoftware.openfire.spi.ConnectionManagerImpl;
 import org.jivesoftware.openfire.spi.ConnectionType;
 import org.jivesoftware.openfire.spi.PacketDelivererImpl;
@@ -127,7 +128,6 @@ import org.jivesoftware.util.LocaleUtils;
 import org.jivesoftware.util.Log;
 import org.jivesoftware.util.SystemProperty;
 import org.jivesoftware.util.TaskEngine;
-import org.jivesoftware.openfire.archive.ArchiveManager;
 import org.jivesoftware.util.cache.CacheFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -758,6 +758,20 @@ public class XMPPServer {
         loadModule(AuditManagerImpl.class.getName());
         loadModule(RosterManager.class.getName());
         loadModule(PrivateStorage.class.getName());
+        
+        // before modules
+        String modules = JiveGlobals.getXMLProperty("modules.before");
+        logger.info("load before modules: {}.", modules);
+        if (modules != null) {
+        	String ms[] = modules.split(",");
+        	for (String m :ms ) {
+        		if (m.trim().length() > 0) {
+        			logger.info("load module: {}.", m);
+        			loadModule(m);
+        		}
+        	}
+        }
+        
         // Load core modules
         loadModule(PresenceManagerImpl.class.getName());
         loadModule(SessionManager.class.getName());
@@ -809,6 +823,19 @@ public class XMPPServer {
         loadModule(EntityCapabilitiesManager.class.getName());
         loadModule(SoftwareVersionManager.class.getName());
         loadModule(SoftwareServerVersionManager.class.getName());
+        
+        // before modules
+        modules = JiveGlobals.getXMLProperty("modules.after");
+        logger.info("load after modules: {}.", modules);
+        if (modules != null) {
+        	String ms[] = modules.split(",");
+        	for (String m :ms ) {
+        		if (m.trim().length() > 0) {
+        			logger.info("load module: {}.", m);
+        			loadModule(m);
+        		}
+        	}
+        }
 
         // Load this module always last since we don't want to start listening for clients
         // before the rest of the modules have been started
