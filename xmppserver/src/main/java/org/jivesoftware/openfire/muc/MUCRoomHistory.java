@@ -53,6 +53,16 @@ public final class MUCRoomHistory {
         this.isNonAnonymousRoom = mucRoom.canAnyoneDiscoverJID();
         this.historyStrategy = historyStrategy;
     }
+    
+    /**
+     * remove history Message by fromJID and stanzaId
+     * 
+     * @param fromJID {@link Message#getFrom()}
+     * @param stanzaId {@link Message#getID()}
+     */
+    public void removeMessage(JID fromJID, String stanzaId) {
+    	this.historyStrategy.removeMessage(fromJID, stanzaId);
+    }
 
     public void addMessage(Message packet) {
         boolean isSubjectChangeRequest = isSubjectChangeRequest(packet);

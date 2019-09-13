@@ -23,12 +23,14 @@ import java.util.LinkedList;
 import java.util.ListIterator;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+import org.apache.commons.lang3.StringUtils;
 import org.jivesoftware.openfire.muc.cluster.UpdateHistoryStrategy;
 import org.jivesoftware.openfire.muc.spi.MUCPersistenceManager;
 import org.jivesoftware.util.JiveGlobals;
 import org.jivesoftware.util.cache.CacheFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.xmpp.packet.JID;
 import org.xmpp.packet.Message;
 
 /**
@@ -156,6 +158,16 @@ public class HistoryStrategy {
      */
     public Type getType(){
         return type;
+    }
+    
+    /**
+     * remove history Message by fromJID and stanzaId
+     * 
+     * @param fromJID {@link Message#getFrom()}
+     * @param stanzaId {@link Message#getID()}
+     */
+    public void removeMessage(JID fromJID, String stanzaId) {
+    	history.removeIf(p -> p.getFrom().equals(fromJID) && StringUtils.compare(p.getID(), stanzaId) == 0);
     }
 
     /**
