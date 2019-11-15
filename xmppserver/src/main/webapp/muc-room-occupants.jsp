@@ -29,6 +29,7 @@
 <%@ page import="org.jivesoftware.openfire.XMPPServer" %>
 <%@ page import="org.jivesoftware.openfire.muc.NotAllowedException" %>
 <%@ page import="org.xmpp.packet.JID" %>
+<%@ page import="java.util.Base64" %>
 
 <%@ taglib uri="http://java.sun.com/jsp/jstl/core" prefix="c"%>
 <%@ taglib uri="http://java.sun.com/jsp/jstl/fmt" prefix="fmt" %>
@@ -172,7 +173,16 @@
         <% for (MUCRole role : room.getOccupants()) { %>
         <tr>
             <td><%= StringUtils.escapeHTMLTags(role.getUserAddress().toString()) %></td>
-            <td><%= StringUtils.escapeHTMLTags(role.getNickname().toString()) %></td>
+            <td>
+            	<%
+            		String nickname = role.getNickname();
+            		String[] nicks = nickname.split("-");
+            		if (nicks.length > 1 && nicks[1].startsWith("$b64$")) {
+            			nickname = new String(Base64.getDecoder().decode(nicks[1].substring(5)), "utf8");
+            		}
+            		out.write(StringUtils.escapeHTMLTags(nickname.toString()));
+                %>
+            </td>
             <td><%= StringUtils.escapeHTMLTags(role.getRole().toString()) %></td>
             <td><%= StringUtils.escapeHTMLTags(role.getAffiliation().toString()) %></td>
             <td><a href="muc-room-occupants.jsp?roomJID=<%= URLEncoder.encode(room.getJID().toBareJID(), "UTF-8") %>&nickName=<%= URLEncoder.encode(role.getNickname(), "UTF-8") %>&kick=1&csrf=${csrf}" title="<fmt:message key="muc.room.occupants.kick"/>"><img src="images/delete-16x16.gif" alt="<fmt:message key="muc.room.occupants.kick"/>" border="0" width="16" height="16"/></a></td>
