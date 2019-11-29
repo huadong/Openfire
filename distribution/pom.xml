@@ -5,7 +5,7 @@
     <parent>
         <artifactId>parent</artifactId>
         <groupId>org.igniterealtime.openfire</groupId>
-        <version>4.4.1.zhuyin</version>
+        <version>4.4.4.zhuyin</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -131,7 +131,7 @@
         <dependency>
             <groupId>org.igniterealtime.openfire.plugins</groupId>
             <artifactId>search</artifactId>
-            <version>1.7.2</version>
+            <version>1.7.3</version>
             <classifier>openfire-plugin-assembly</classifier>
             <scope>provided</scope>
         </dependency>

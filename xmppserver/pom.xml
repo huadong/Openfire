@@ -4,7 +4,7 @@
     <parent>
         <groupId>org.igniterealtime.openfire</groupId>
         <artifactId>parent</artifactId>
-        <version>4.4.1.zhuyin</version>
+        <version>4.4.4.zhuyin</version>
     </parent>
     <artifactId>xmppserver</artifactId>
     <name>Core XMPP Server</name>
@@ -337,7 +337,7 @@
         <dependency>
             <groupId>mysql</groupId>
             <artifactId>mysql-connector-java</artifactId>
-            <version>8.0.12</version>
+            <version>8.0.17</version>
         </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
