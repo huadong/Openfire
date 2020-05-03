@@ -150,6 +150,11 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
     private IQMUCSearchHandler searchHandler = null;
 
     /**
+     * The handler of search requests ('https://xmlns.zombofant.net/muclumbus/search/1.0' namespace).
+     */
+    private IQMuclumbusSearchHandler muclumbusSearchHandler = null;
+
+    /**
      * Plugin (etc) provided IQ Handlers for MUC:
      */
     private Map<String,IQHandler> iqHandlers = null;
@@ -394,6 +399,10 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
             final IQ reply = searchHandler.handleIQ(iq);
             router.route(reply);
         }
+        else if (IQMuclumbusSearchHandler.NAMESPACE.equals(namespace)) {
+            final IQ reply = muclumbusSearchHandler.handleIQ(iq);
+            router.route(reply);
+        }
         else if ("http://jabber.org/protocol/disco#info".equals(namespace)) {
             // TODO MUC should have an IQDiscoInfoHandler of its own when MUC becomes
             // a component
@@ -622,12 +631,15 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
             }
             try {
                 Date cleanUpDate = getCleanupDate();
-                Iterator<LocalMUCRoom> it = localMUCRoomManager.getRooms().iterator();
-                while (it.hasNext()) {
-                    LocalMUCRoom room = it.next();
-                    Date emptyDate = room.getEmptyDate();
-                    if (emptyDate != null && emptyDate.before(cleanUpDate)) {
-                        removeChatRoom(room.getName());
+                if (cleanUpDate!=null)
+                {
+                    Iterator<LocalMUCRoom> it = localMUCRoomManager.getRooms().iterator();
+                    while (it.hasNext()) {
+                        LocalMUCRoom room = it.next();
+                        Date emptyDate = room.getEmptyDate();
+                        if (emptyDate != null && emptyDate.before(cleanUpDate)) {
+                            removeChatRoom(room.getName());
+                        }
                     }
                 }
             }
@@ -906,7 +918,10 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
      * @return the limit date after which rooms without activity will be removed from memory.
      */
     private Date getCleanupDate() {
-        return new Date(System.currentTimeMillis() - (emptyLimit * 3600000));
+        if (emptyLimit!=-1)
+            return new Date(System.currentTimeMillis() - (emptyLimit * 3600000));
+        else
+            return null;
     }
 
     @Override
@@ -1133,8 +1148,9 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
         router = server.getPacketRouter();
         // Configure the handler of iq:register packets
         registerHandler = new IQMUCRegisterHandler(this);
-        // Configure the handler of jabber:iq:search packets
+        // Configure the handlers of search requests
         searchHandler = new IQMUCSearchHandler(this);
+        muclumbusSearchHandler = new IQMuclumbusSearchHandler(this);
     }
 
     public void initializeSettings() {
@@ -1239,7 +1255,10 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
         emptyLimit = 30 * 24;
         if (value != null) {
             try {
-                emptyLimit = Integer.parseInt(value) * 24;
+            	if (Integer.parseInt(value)>0)
+            		emptyLimit = Integer.parseInt(value) * 24;
+            	else
+            		emptyLimit = -1;
             }
             catch (final NumberFormatException e) {
                 Log.error("Wrong number format of property unload.empty_days for service "+chatServiceName, e);
@@ -1538,7 +1557,10 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
             features.add("http://jabber.org/protocol/muc");
             features.add("http://jabber.org/protocol/disco#info");
             features.add("http://jabber.org/protocol/disco#items");
-            features.add("jabber:iq:search");
+            if ( IQMuclumbusSearchHandler.PROPERTY_ENABLED.getValue() ) {
+                features.add( "jabber:iq:search" );
+            }
+            features.add(IQMuclumbusSearchHandler.NAMESPACE);
             features.add(ResultSet.NAMESPACE_RESULT_SET_MANAGEMENT);
             if (!extraDiscoFeatures.isEmpty()) {
                 features.addAll(extraDiscoFeatures);
@@ -1598,6 +1620,11 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
 
     @Override
     public DataForm getExtendedInfo(final String name, final String node, final JID senderJID) {
+        return IQDiscoInfoHandler.getFirstDataForm(this.getExtendedInfos(name, node, senderJID));
+    }
+
+    @Override
+    public Set<DataForm> getExtendedInfos(String name, String node, JID senderJID) {
         if (name != null && node == null) {
             // Answer the extended info of a given room
             final MUCRoom room = getChatRoom(name);
@@ -1633,11 +1660,12 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
                 fieldDate.setVariable("x-muc#roominfo_creationdate");
                 fieldDate.setLabel(LocaleUtils.getLocalizedString("muc.extended.info.creationdate"));
                 fieldDate.addValue(XMPPDateTimeFormat.format(room.getCreationDate()));
-
-                return dataForm;
+                final Set<DataForm> dataForms = new HashSet<>();
+                dataForms.add(dataForm);
+                return dataForms;
             }
         }
-        return null;
+        return new HashSet<DataForm>();
     }
 
     /**

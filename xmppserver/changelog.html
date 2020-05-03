@@ -163,6 +163,141 @@ hr {
     <div id="pageBody">
 
 
+<h2>4.5.1 -- <span style="font-weight: normal;">January 31, 2020</span></h2>
+<h2>        Bug
+</h2>
+<ul>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1946'>OF-1946</a>] -         Cache &quot;Percent Used&quot; values are incorrect
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1959'>OF-1959</a>] -         Can not connect to LDAP/AD on new installations
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1961'>OF-1961</a>] -         Potential ClassCastException with LDAP setup
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1962'>OF-1962</a>] -         MySQL serverTimezone not set
+</li>
+</ul>
+
+
+<h2>4.5.0 -- <span style="font-weight: normal;">January 10, 2020</span></h2>
+<h2>        Bug
+</h2>
+<ul>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-353'>OF-353</a>] -         LDAP InvalidNameException related to quotes
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1779'>OF-1779</a>] -         Incorrect SQL DELETE statement in PubSub causes exception
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1826'>OF-1826</a>] -         NullPointerException in new Dataforms implementation
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1830'>OF-1830</a>] -         Failing to establish TLS when using Java 11
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1858'>OF-1858</a>] -         MUC services are not added/removed from other cluster nodes
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1892'>OF-1892</a>] -         Group sorting shouldn&#39;t be case sensitive
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1895'>OF-1895</a>] -         SystemProperty should work with plugins
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1898'>OF-1898</a>] -         max cache size should be consistent to long
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1902'>OF-1902</a>] -         Further limit HTTP fetching security from Openfire
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1923'>OF-1923</a>] -         Steam Management should not close reconnected session
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1928'>OF-1928</a>] -         Reflected XSS in MUC Room affiliation page
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1932'>OF-1932</a>] -         &quot;Test Settings&quot; of LDAP User Mapping always fails
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1936'>OF-1936</a>] -         OOM when browsing audit log
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1937'>OF-1937</a>] -         Performance problems when first LDAP server cannot be reached
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1938'>OF-1938</a>] -         Bump Bouncy Castle version to v1.64
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1947'>OF-1947</a>] -         LDAP VCard template should not replace non-placeholders
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1949'>OF-1949</a>] -         LDAP name parts should combine in user&#39;s Name attribute.
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1951'>OF-1951</a>] -         SystemProperty Description fails to work with plugins
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1953'>OF-1953</a>] -         NPE in admin console session page
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1954'>OF-1954</a>] -         Creating new MUC conference leads to NPE in admin console
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1955'>OF-1955</a>] -         XSS flaws identified by Cyber Security Works Document No: C1059
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1956'>OF-1956</a>] -         Restarting s2s may fail with Error starting: 5269 Address already in use (Bind failed)
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1958'>OF-1958</a>] -         PSI XMPP Client fails to connect
+</li>
+</ul>
+        
+<h2>        New Feature
+</h2>
+<ul>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1806'>OF-1806</a>] -         Add support for XEP-0232: Software Information
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1935'>OF-1935</a>] -         Allow cleanup of MUC rooms to be skipped
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1943'>OF-1943</a>] -         Allow LDAP group to provide Openfire admins
+</li>
+</ul>
+        
+<h2>        Task
+</h2>
+<ul>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1219'>OF-1219</a>] -         ClassCastException on setup-ldap-user.jsp DefaultUserProvider cannot be cast to LdapUserProvider
+</li>
+</ul>
+    
+<h2>        Improvement
+</h2>
+<ul>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1106'>OF-1106</a>] -         Ability to set ldap.nameField to a multiple of AD values
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1809'>OF-1809</a>] -         DiscoInfoProvider should allow for more than one &quot;Extended Info&quot; form.
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1821'>OF-1821</a>] -         Set ldap.pagedResultsSize to 1000 by default when AD integration is used
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1839'>OF-1839</a>] -         XEP-0411: Add or improve support for Bookmarks Conversion
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1841'>OF-1841</a>] -         Add better toString implementations to Session classes
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1855'>OF-1855</a>] -         S2S: Allow Mutual Authentication by default when using signed certificate
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1865'>OF-1865</a>] -         Add an AdminProvider that identifies administrators by the group they are in
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1866'>OF-1866</a>] -         Filtering users by group in LDAP
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1868'>OF-1868</a>] -         Session message carbons, requested blocklist not clustered
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1882'>OF-1882</a>] -         Don&#39;t retrieve all offline messages only to count them.
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1883'>OF-1883</a>] -         Client session list should include detached sessions
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1884'>OF-1884</a>] -         StreamManagement failing when debug logging enabled
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1887'>OF-1887</a>] -         Update bundled postgresql driver to 42.2.8
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1889'>OF-1889</a>] -         Standardised CSRF protection for plugins
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1890'>OF-1890</a>] -         Support for flattening LDAP nested groups
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1903'>OF-1903</a>] -         Support for @WebServlet annotation
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1924'>OF-1924</a>] -         Make SM DetachedCleanupTask scheduling related to max detach time
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1925'>OF-1925</a>] -         Hint on what server a stream should be resumed.
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1926'>OF-1926</a>] -         Steam Management should tell clients how long they can be detached.
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1929'>OF-1929</a>] -         LDAPS should not be an advanced setting
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1930'>OF-1930</a>] -         Make LocalMUCRoom more thread safe
+</li>
+<li>[<a href='https://issues.igniterealtime.org/browse/OF-1944'>OF-1944</a>] -         Clear caches after changing LDAP profile settings
+</li>
+</ul>
+
+
 <h2>4.4.4 -- <span style="font-weight: normal;">November 12, 2019</span></h2>
 <h2>        Bug
 </h2>
