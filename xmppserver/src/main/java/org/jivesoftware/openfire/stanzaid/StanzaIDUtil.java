@@ -22,7 +22,8 @@ public class StanzaIDUtil
     private static final Logger Log = LoggerFactory.getLogger( StanzaIDUtil.class );
 
     /**
-     * Modifies the stanza that's passed as a packet by adding a Stanza ID.
+     * Modifies the stanza that's passed as a packet by adding a Stanza ID on behalf of what is assumed to be a local
+     * entity.
      *
      * @param packet The inbound packet (cannot be null).
      * @param self The ID of the 'local' entity that will generate the stanza ID (cannot be null).
@@ -78,7 +79,8 @@ public class StanzaIDUtil
             }
         }
 
-        final String id = generateUniqueAndStableStanzaID( packet );
+        final String id = UUID.randomUUID().toString();
+        Log.debug( "Using newly generated value '{}' for stanza that has id '{}'.", id, packet.getID() );
 
         final Element stanzaIdElement = parentElement.addElement( QName.get( "stanza-id", "urn:xmpp:sid:0" ) );
         stanzaIdElement.addAttribute( "id", id );
@@ -93,26 +95,35 @@ public class StanzaIDUtil
      *
      * @param packet The stanza for what to return the ID (cannot be null).
      * @return The ID (never null or empty string).
+     * @deprecated Use UUID.randomUUID() instead
      */
+    @Deprecated // Remove in or after Openfire 4.8.0
     public static String generateUniqueAndStableStanzaID( final Packet packet )
     {
-        String result = null;
+        return UUID.randomUUID().toString();
+    }
 
-        final Iterator<Element> existingElementIterator = packet.getElement().elementIterator( QName.get( "origin-id", "urn:xmpp:sid:0" ) );
-        while (existingElementIterator.hasNext() && (result == null || result.isEmpty() ) )
-        {
-            final Element element = existingElementIterator.next();
-            result = element.attributeValue( "id" );
+    /**
+     * Returns the first stable and unique stanza-id value from the packet, that is defined
+     * for a particular 'by' value.
+     *
+     * This method does not evaluate 'origin-id' elements in the packet.
+     *
+     * @param packet The stanza (cannot be null).
+     * @param by The 'by' value for which to return the ID (cannot be null or an empty string).
+     * @return The unique and stable ID, or null if no such ID is found.
+     * @deprecated This implementation only works with IDs that are UUIDs, which they need not be. Use {@link #findFirstUniqueAndStableStanzaID(Packet, String)} instead. OF-2026
+     */
+    @Deprecated
+    public static UUID parseUniqueAndStableStanzaID( final Packet packet, final String by )
+    {
+        final String result = findFirstUniqueAndStableStanzaID( packet, by );
+        if ( result == null ) {
+            return null;
         }
 
-        if ( result == null || result.isEmpty() ) {
-            result = UUID.randomUUID().toString();
-            Log.debug( "Using newly generated value '{}' for stanza that has id '{}'.", result, packet.getID() );
-        } else {
-            Log.debug( "Using origin-id provided value '{}' for stanza that has id '{}'.", result, packet.getID() );
-        }
-
-        return result;
+        // Note that this is not compliant with XEP-0359, which specifies that ID values SHOULD (but need not be) UUIDs. This method is retained for backward compatibility with Openfire versions older than 4.5.2.
+        return UUID.fromString( result );
     }
 
     /**
@@ -125,7 +136,7 @@ public class StanzaIDUtil
      * @param by The 'by' value for which to return the ID (cannot be null or an empty string).
      * @return The unique and stable ID, or null if no such ID is found.
      */
-    public static UUID parseUniqueAndStableStanzaID( final Packet packet, final String by )
+    public static String findFirstUniqueAndStableStanzaID( final Packet packet, final String by )
     {
         if ( packet == null )
         {
@@ -149,7 +160,7 @@ public class StanzaIDUtil
                 final String result = sid.attributeValue( "id" );
                 if ( result != null && !result.isEmpty() )
                 {
-                    return UUID.fromString( result );
+                    return result;
                 }
             }
         }

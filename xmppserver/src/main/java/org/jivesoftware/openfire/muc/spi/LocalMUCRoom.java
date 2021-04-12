@@ -20,13 +20,17 @@ import java.io.IOException;
 import java.io.ObjectInput;
 import java.io.ObjectOutput;
 import java.text.MessageFormat;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Collectors;
 
+import org.dom4j.DocumentHelper;
 import org.dom4j.Element;
+import org.dom4j.QName;
 import org.jivesoftware.database.SequenceManager;
 import org.jivesoftware.openfire.PacketRouter;
 import org.jivesoftware.openfire.XMPPServer;
@@ -41,21 +45,7 @@ import org.jivesoftware.openfire.group.GroupAwareMap;
 import org.jivesoftware.openfire.group.GroupJID;
 import org.jivesoftware.openfire.group.GroupManager;
 import org.jivesoftware.openfire.group.GroupNotFoundException;
-import org.jivesoftware.openfire.muc.CannotBeInvitedException;
-import org.jivesoftware.openfire.muc.ConflictException;
-import org.jivesoftware.openfire.muc.ForbiddenException;
-import org.jivesoftware.openfire.muc.HistoryRequest;
-import org.jivesoftware.openfire.muc.HistoryStrategy;
-import org.jivesoftware.openfire.muc.MUCEventDispatcher;
-import org.jivesoftware.openfire.muc.MUCRole;
-import org.jivesoftware.openfire.muc.MUCRoom;
-import org.jivesoftware.openfire.muc.MUCRoomHistory;
-import org.jivesoftware.openfire.muc.MultiUserChatService;
-import org.jivesoftware.openfire.muc.NotAcceptableException;
-import org.jivesoftware.openfire.muc.NotAllowedException;
-import org.jivesoftware.openfire.muc.RegistrationRequiredException;
-import org.jivesoftware.openfire.muc.RoomLockedException;
-import org.jivesoftware.openfire.muc.ServiceUnavailableException;
+import org.jivesoftware.openfire.muc.*;
 import org.jivesoftware.openfire.muc.cluster.AddAffiliation;
 import org.jivesoftware.openfire.muc.cluster.AddMember;
 import org.jivesoftware.openfire.muc.cluster.BroadcastMessageRequest;
@@ -70,24 +60,19 @@ import org.jivesoftware.openfire.muc.cluster.UpdateOccupantRequest;
 import org.jivesoftware.openfire.muc.cluster.UpdatePresence;
 import org.jivesoftware.openfire.user.UserAlreadyExistsException;
 import org.jivesoftware.openfire.user.UserNotFoundException;
-import org.jivesoftware.util.JiveConstants;
-import org.jivesoftware.util.JiveGlobals;
-import org.jivesoftware.util.LocaleUtils;
-import org.jivesoftware.util.NotFoundException;
+import org.jivesoftware.util.*;
 import org.jivesoftware.util.cache.CacheFactory;
 import org.jivesoftware.util.cache.ExternalizableUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.xmpp.packet.IQ;
-import org.xmpp.packet.JID;
-import org.xmpp.packet.Message;
-import org.xmpp.packet.Packet;
-import org.xmpp.packet.PacketError;
-import org.xmpp.packet.Presence;
+import org.xmpp.packet.*;
+
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 /**
  * Implementation of a chatroom that is being hosted by this JVM. A LocalMUCRoom could represent
- * a persistent room which means that its configuration will be maintained in synch with its
+ * a persistent room which means that its configuration will be maintained in sync with its
  * representation in the database.<p>
  *
  * When running in a cluster each cluster node will have its own copy of local rooms. Persistent
@@ -101,6 +86,19 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
 
     private static final Logger Log = LoggerFactory.getLogger(LocalMUCRoom.class);
 
+    private static final SystemProperty<Boolean> JOIN_PRESENCE_ENABLE = SystemProperty.Builder.ofType(Boolean.class)
+        .setKey("xmpp.muc.join.presence")
+        .setDynamic(true)
+        .setDefaultValue(true)
+        .build();
+
+    private static final SystemProperty<Duration> SELF_PRESENCE_TIMEOUT = SystemProperty.Builder.ofType(Duration.class)
+        .setKey("xmpp.muc.join.self-presence-timeout")
+        .setDynamic(true)
+        .setDefaultValue(Duration.ofSeconds( 2 ))
+        .setChronoUnit(ChronoUnit.MILLIS)
+        .build();
+
     /**
      * The service hosting the room.
      */
@@ -109,17 +107,17 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     /**
      * The occupants of the room accessible by the occupants nickname.
      */
-    private Map<String, List<MUCRole>> occupantsByNickname = new ConcurrentHashMap<>();
+    private final Map<String, List<MUCRole>> occupantsByNickname = new ConcurrentHashMap<>();
 
     /**
      * The occupants of the room accessible by the occupants bare JID.
      */
-    private Map<JID, List<MUCRole>> occupantsByBareJID = new ConcurrentHashMap<>();
+    private final Map<JID, List<MUCRole>> occupantsByBareJID = new ConcurrentHashMap<>();
 
     /**
      * The occupants of the room accessible by the occupants full JID.
      */
-    private Map<JID, MUCRole> occupantsByFullJID = new ConcurrentHashMap<>();
+    private final Map<JID, MUCRole> occupantsByFullJID = new ConcurrentHashMap<>();
 
     /**
      * The name of the room.
@@ -134,7 +132,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     /**
      * The role of the room itself.
      */
-    private MUCRole role = new RoomRole(this);
+    private final MUCRole role = new RoomRole(this);
 
     /**
      * The router used to send packets for the room.
@@ -215,7 +213,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
      * List of roles of which presence will be broadcasted to the rest of the occupants. This
      * feature is useful for implementing "invisible" occupants.
      */
-    private List<String> rolesToBroadcastPresence = new ArrayList<>();
+    private List<MUCRole.Role> rolesToBroadcastPresence = new ArrayList<>();
 
     /**
      * A public room means that the room is searchable and visible. This means that the room can be
@@ -289,6 +287,42 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     private boolean registrationEnabled;
 
     /**
+     * Enables the FMUC functionality.
+     */
+    private boolean fmucEnabled;
+
+    /**
+     * The address of the MUC room (typically on a remote XMPP domain) to which this room should initiate
+     * FMUC federation. In this federation, the local node takes the role of the 'joining' node, while the remote node
+     * takes the role of the 'joined' node.
+     *
+     * When this room is not expected to initiate federation (note that it can still accept inbound federation attempts)
+     * then this is null.
+     *
+     * Although a room can accept multiple inbound joins (where it acts as a 'parent' node), it can initiate only one
+     * outbound join at a time (where it acts as a 'child' node).
+     */
+    private JID fmucOutboundNode;
+
+    /**
+     * The 'mode' that describes the FMUC configuration is captured in the supplied object, which is
+     * either master-master or master-slave.
+     *
+     * This should be null only when no outbound federation should be attempted (when {@link #fmucEnabled} is false).
+     */
+    private FMUCMode fmucOutboundMode;
+
+    /**
+     * A set of addresses of MUC rooms (typically on a remote XMPP domain) that defines the list of rooms that is
+     * permitted to to federate with the local room.
+     *
+     * A null value is to be interpreted as allowing all rooms to be permitted.
+     *
+     * An empty set of addresses is to be interpreted as disallowing all rooms to be permitted.
+     */
+    private Set<JID> fmucInboundNodes;
+
+    /**
      * Internal component that handles IQ packets sent by the room owners.
      */
     private IQOwnerHandler iqOwnerHandler;
@@ -297,6 +331,11 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
      * Internal component that handles IQ packets sent by moderators, admins and owners.
      */
     private IQAdminHandler iqAdminHandler;
+
+    /**
+     * Internal component that handles FMUC stanzas.
+     */
+    private FMUCHandler fmucHandler;
 
     /**
      * The last known subject of the room. This information is used to respond disco requests. The
@@ -346,7 +385,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
      * @param roomname the name of the room.
      * @param packetRouter the router for sending packets from the room.
      */
-    LocalMUCRoom(MultiUserChatService chatservice, String roomname, PacketRouter packetRouter) {
+    LocalMUCRoom( @Nonnull MultiUserChatService chatservice, @Nonnull String roomname, @Nonnull PacketRouter packetRouter) {
         this.mucService = chatservice;
         this.name = roomname;
         this.naturalLanguageName = roomname;
@@ -372,12 +411,13 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         roomHistory = new MUCRoomHistory(this, new HistoryStrategy(mucService.getHistoryStrategy()));
         this.iqOwnerHandler = new IQOwnerHandler(this, packetRouter);
         this.iqAdminHandler = new IQAdminHandler(this, packetRouter);
+        this.fmucHandler = new FMUCHandler(this, packetRouter);
         // No one can join the room except the room's owner
         this.lockedTime = startTime;
         // Set the default roles for which presence is broadcast
-        rolesToBroadcastPresence.add("moderator");
-        rolesToBroadcastPresence.add("participant");
-        rolesToBroadcastPresence.add("visitor");
+        rolesToBroadcastPresence.add(MUCRole.Role.moderator);
+        rolesToBroadcastPresence.add(MUCRole.Role.participant);
+        rolesToBroadcastPresence.add(MUCRole.Role.visitor);
     }
 
     @Override
@@ -396,7 +436,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     @Override
-    public void setMUCService(MultiUserChatService service) {
+    public void setMUCService( MultiUserChatService service) {
         this.mucService = service;
     }
 
@@ -522,7 +562,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     @Override
-    public MUCRole.Affiliation getAffiliation(JID jid) {
+    public MUCRole.Affiliation getAffiliation(@Nonnull JID jid) {
         final JID bareJID = jid.asBareJID();
 
         if (owners.includes(bareJID)) {
@@ -531,193 +571,199 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         else if (admins.includes(bareJID)) {
             return MUCRole.Affiliation.admin;
         }
-        else if (members.includesKey(bareJID)) {
-            return MUCRole.Affiliation.member;
-        }
+        // explicit outcast status has higher precedence than member status
         else if (outcasts.includes(bareJID)) {
             return MUCRole.Affiliation.outcast;
+        }
+        else if (members.includesKey(bareJID)) {
+            return MUCRole.Affiliation.member;
         }
         return MUCRole.Affiliation.none;
     }
 
-    @Override
-    public MUCRole joinRoom(String nickname, String password, HistoryRequest historyRequest,
-            LocalMUCUser user, Presence presence) throws UnauthorizedException,
-            UserAlreadyExistsException, RoomLockedException, ForbiddenException,
-            RegistrationRequiredException, ConflictException, ServiceUnavailableException,
-            NotAcceptableException {
-        if (((MultiUserChatServiceImpl)mucService).getMUCDelegate() != null) {
-            if (!((MultiUserChatServiceImpl)mucService).getMUCDelegate().joiningRoom(this, user.getAddress())) {
-                // Delegate said no, reject join.
-                throw new UnauthorizedException();
-            }
-        }
-        MUCRole joinRole;
-        lock.writeLock().lock();
-        boolean clientOnlyJoin = false;
-        // A "client only join" here is one where the client is already joined, but has re-joined.
-        try {
-            // If the room has a limit of max user then check if the limit has been reached
-            if (!canJoinRoom(user)) {
-                throw new ServiceUnavailableException();
-            }
-            final JID bareJID = user.getAddress().asBareJID();
-            boolean isOwner = owners.includes(bareJID);
-            // If the room is locked and this user is not an owner raise a RoomLocked exception
-            if (isLocked()) {
-                if (!isOwner) {
-                    throw new RoomLockedException();
-                }
-            }
-            // Check if the nickname is already used in the room
-            if (occupantsByNickname.containsKey(nickname.toLowerCase())) {
-                List<MUCRole> occupants = occupantsByNickname.get(nickname.toLowerCase());
-                MUCRole occupant = occupants.size() > 0 ? occupants.get(0) : null;
-                if (occupant != null && !occupant.getUserAddress().toBareJID().equals(bareJID.toBareJID())) {
-                    // Nickname is already used, and not by the same JID
-                    throw new UserAlreadyExistsException();
-                }
-                // Is this client already joined with this nickname?
-                for (MUCRole mucRole : occupants) {
-                    if (mucRole.getUserAddress().equals(user.getAddress())) {
-                        clientOnlyJoin = true;
-                        break;
-                    }
-                }
-            }
-            // If the room is password protected and the provided password is incorrect raise a
-            // Unauthorized exception - unless the JID that is joining is a system admin.
-            if (isPasswordProtected()) {
-                final boolean isCorrectPassword = (password != null && password.equals(getPassword()));
-                final boolean isSysadmin = mucService.isSysadmin(bareJID);
-                final boolean requirePassword = !isSysadmin || mucService.isPasswordRequiredForSysadminsToJoinRoom();
-                if (!isCorrectPassword && requirePassword ) {
-                    throw new UnauthorizedException();
-                }
-            }
-            // If another user attempts to join the room with a nickname reserved by the first user
-            // raise a ConflictException
-            if (members.containsValue(nickname.toLowerCase())) {
-                if (!nickname.toLowerCase().equals(members.get(bareJID))) {
-                    throw new ConflictException();
-                }
-            }
-            if (isLoginRestrictedToNickname()) {
-                String reservedNickname = members.get(bareJID);
-                if (reservedNickname != null && !nickname.toLowerCase().equals(reservedNickname)) {
-                    throw new NotAcceptableException();
-                }
-            }
+    public MUCRole.Role getRole(@Nonnull JID jid)
+    {
+        final JID bareJID = jid.asBareJID();
 
-            // Set the corresponding role based on the user's affiliation
-            MUCRole.Role role;
-            MUCRole.Affiliation affiliation;
-            if (isOwner) {
-                // The user is an owner. Set the role and affiliation accordingly.
+        if (owners.includes(bareJID)) {
+            return MUCRole.Role.moderator;
+        }
+        else if (admins.includes(bareJID)) {
+            return MUCRole.Role.moderator;
+        }
+        // explicit outcast status has higher precedence than member status
+        else if (outcasts.contains(bareJID)) {
+            return null; // Outcasts have no role, as they're not allowed in the room.
+        }
+        else if (members.includesKey(bareJID)) {
+            // The user is a member. Set the role and affiliation accordingly.
+            return MUCRole.Role.participant;
+        }
+        else {
+            return isModerated() ? MUCRole.Role.visitor : MUCRole.Role.participant;
+        }
+    }
+
+    @Override
+    public MUCRole joinRoom( @Nonnull String nickname,
+                             @Nullable String password,
+                             @Nullable HistoryRequest historyRequest,
+                             @Nonnull LocalMUCUser user,
+                             @Nonnull Presence presence )
+        throws UnauthorizedException, UserAlreadyExistsException, RoomLockedException, ForbiddenException,
+            RegistrationRequiredException, ConflictException, ServiceUnavailableException, NotAcceptableException
+    {
+        Log.debug( "User '{}' attempts to join room '{}' using nickname '{}'.", user.getAddress(), this.getJID(), nickname );
+        MUCRole joinRole;
+        boolean clientOnlyJoin; // A "client only join" here is one where the client is already joined, but has re-joined.
+
+        lock.writeLock().lock();
+        try {
+            // Determine the corresponding role based on the user's affiliation
+            final JID bareJID = user.getAddress().asBareJID();
+            MUCRole.Role role = getRole( bareJID );
+            MUCRole.Affiliation affiliation = getAffiliation( bareJID );
+            if (affiliation != MUCRole.Affiliation.owner && mucService.isSysadmin(bareJID)) {
+                // The user is a system administrator of the MUC service. Treat him as an owner although he won't appear in the list of owners
+                Log.debug( "User '{}' is a sysadmin. Treat as owner.", user.getAddress());
                 role = MUCRole.Role.moderator;
                 affiliation = MUCRole.Affiliation.owner;
             }
-            else if (mucService.isSysadmin(bareJID)) {
-                // The user is a system administrator of the MUC service. Treat him as an owner
-                // although he won't appear in the list of owners
-                role = MUCRole.Role.moderator;
-                affiliation = MUCRole.Affiliation.owner;
-            }
-            else if (admins.includes(bareJID)) {
-                // The user is an admin. Set the role and affiliation accordingly.
-                role = MUCRole.Role.moderator;
-                affiliation = MUCRole.Affiliation.admin;
-            }
-            // explicit outcast status has higher precedence than member status
-            else if (outcasts.contains(bareJID)) {
-                // The user is an outcast. Raise a "Forbidden" exception.
-                throw new ForbiddenException();
-            }
-            else if (members.includesKey(bareJID)) {
-                // The user is a member. Set the role and affiliation accordingly.
-                role = MUCRole.Role.participant;
-                affiliation = MUCRole.Affiliation.member;
-            }
-            // this checks if the user is an outcast implicitly (via a group)
-            else if (outcasts.includes(bareJID)) {
-                // The user is an outcast. Raise a "Forbidden" exception.
-                throw new ForbiddenException();
-            }
-            else {
-                // The user has no affiliation (i.e. NONE). Set the role accordingly.
-                if (isMembersOnly()) {
-                    // The room is members-only and the user is not a member. Raise a
-                    // "Registration Required" exception.
-                    throw new RegistrationRequiredException();
+            Log.debug( "User '{}' role and affiliation in room '{} are determined to be: {}, {}", user.getAddress(), this.getJID(), role, affiliation );
+
+            // Verify that the attempt meets all preconditions for joining the room.
+            checkJoinRoomPreconditions( user, nickname, affiliation, password, presence );
+
+            // Is this client already joined with this nickname?
+            clientOnlyJoin = alreadyJoinedWithThisNick( user, nickname );
+
+            // TODO up to this point, room state has not been modified, even though a write-lock has been acquired. Can we optimize concurrency by locking with only a read-lock up until here?
+            if (!clientOnlyJoin)
+            {
+                Log.debug( "Adding user '{}' as an occupant of room '{}' using nickname '{}'.", user.getAddress(), this.getJID(), nickname );
+
+                // Create a new role for this user in this room.
+                joinRole = new LocalMUCRole(mucService, this, nickname, role, affiliation, user, presence, router);
+
+                // See if we need to join a federated room. Note that this can be blocking!
+                final Future<?> join = fmucHandler.join(joinRole);
+                try
+                {
+                    // FIXME make this properly asynchronous, instead of blocking the thread!
+                    join.get(5, TimeUnit.MINUTES);
                 }
-                role = (isModerated() ? MUCRole.Role.visitor : MUCRole.Role.participant);
-                affiliation = MUCRole.Affiliation.none;
-            }
-            if (!clientOnlyJoin) {
-                // Create a new role for this user in this room
-                joinRole = new LocalMUCRole(mucService, this, nickname, role,
-                        affiliation, user, presence, router);
-                // Add the new user as an occupant of this room
-                occupantsByNickname.compute(nickname.toLowerCase(), (nick, occupants) -> {
-                    List<MUCRole> ret=occupants !=null ? occupants : new CopyOnWriteArrayList<>();
-                    ret.add(joinRole);
-                    return ret;
-                });
-                // Update the tables of occupants based on the bare and full JID
-                occupantsByBareJID.compute(bareJID, (jid, occupants) -> {
-                    List<MUCRole> ret=occupants !=null ? occupants : new CopyOnWriteArrayList<>();
-                    ret.add(joinRole);
-                    return ret;
-                });
-                occupantsByFullJID.put(user.getAddress(), joinRole);
+                catch ( InterruptedException | ExecutionException | TimeoutException e )
+                {
+                    Log.error( "An exception occurred while processing FMUC join for user '{}' in room '{}'", joinRole.getUserAddress(), joinRole.getChatRoom(), e);
+                }
+
+                addOccupantRole( joinRole );
+
             } else {
                 // Grab the existing one.
+                Log.debug( "Skip adding user '{}' as an occupant of room '{}' using nickname '{}', as it already is. Updating occupancy with its latest presence information.", user.getAddress(), this.getJID(), nickname );
                 joinRole = occupantsByFullJID.get(user.getAddress());
+                if (joinRole instanceof RemoteMUCRole) {
+                    // OF-2179: Re-join from a different cluster node. Apparently, the user is local to this node now?
+                    Log.info("User '{}' is rejoining, but we already have it joined earlier from a different cluster node. Moving user to this node.", user.getAddress() );
+
+                    // Remove the occupant from all nodes (as even on those where the occupant will remain 'remote', its node-ID needs to be updated). This should not trigger presence broadcasts, so it'll be largely 'invisible' to users.
+                    final OccupantLeftEvent occupantLeftEvent = new OccupantLeftEvent(this, joinRole);
+                    CacheFactory.doClusterTask(occupantLeftEvent);
+                    occupantLeftEvent.run();
+
+                    // Re-add the occupant. This should not trigger presence broadcasts, so it'll be largely 'invisible' to users.
+                    joinRole = new LocalMUCRole(mucService, this, nickname, role, affiliation, user, presence, router);
+                    CacheFactory.doClusterTask(new OccupantAddedEvent(this, joinRole));
+                    addOccupantRole( joinRole );
+                }
                 joinRole.setPresence( presence ); // OF-1581: Use latest presence information.
-           }
+            }
         }
         finally {
             lock.writeLock().unlock();
         }
-        // Notify other cluster nodes that a new occupant joined the room
+
+        Log.trace( "Notify other cluster nodes that a new occupant ('{}') joined room '{}'", joinRole.getUserAddress(), joinRole.getChatRoom() );
         CacheFactory.doClusterTask(new OccupantAddedEvent(this, joinRole));
 
-        // Send presence of existing occupants to new occupant
-        sendInitialPresences(joinRole);
-        // It is assumed that the room is new based on the fact that it's locked and
-        // that it was locked when it was created.
-        boolean isRoomNew = isLocked() && creationDate.getTime() == lockedTime;
+        // Exchange initial presence information between occupants of the room.
+        sendInitialPresencesToNewOccupant( joinRole );
+
+        // OF-2042: XEP dictates an order of events. Wait for the presence exchange to finish, before progressing.
+        final CompletableFuture<Void> future = sendInitialPresenceToExistingOccupants(joinRole);
         try {
-            // Send the presence of this new occupant to existing occupants
-            Presence joinPresence = joinRole.getPresence().createCopy();
-            broadcastPresence(joinPresence, true);
+            final Duration timeout = SELF_PRESENCE_TIMEOUT.getValue();
+            future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch ( InterruptedException e ) {
+            Log.debug( "Presence broadcast has been interrupted before it completed. Will continue to process the join of occupant '{}' to room '{}' as if it has.", joinRole.getUserAddress(), joinRole.getChatRoom(), e);
+        } catch ( TimeoutException e ) {
+            Log.warn( "Presence broadcast has not yet been completed within the allocated period. Will continue to process the join of occupant '{}' to room '{}' as if it has.", joinRole.getUserAddress(), joinRole.getChatRoom(), e);
+        } catch ( ExecutionException e ) {
+            Log.warn( "Presence broadcast caused an exception. Will continue to process the join of occupant '{}' to room '{}' as if it has.", joinRole.getUserAddress(), joinRole.getChatRoom(), e);
         }
-        catch (Exception e) {
-            Log.error(LocaleUtils.getLocalizedString("admin.error"), e);
-        }
-        // If the room has just been created send the "room locked until configuration is
-        // confirmed" message
+
+        // If the room has just been created send the "room locked until configuration is confirmed" message.
+        // It is assumed that the room is new based on the fact that it's locked and that it was locked when it was created.
+        final boolean isRoomNew = isLocked() && creationDate.getTime() == lockedTime;
         if (!isRoomNew && isLocked()) {
+            // TODO Verify if it's right that this check occurs only _after_ a join was deemed 'successful' and initial presences have been exchanged.
             // http://xmpp.org/extensions/xep-0045.html#enter-locked
-            Presence presenceItemNotFound = new Presence(Presence.Type.error);
+            Log.debug( "User '{}' attempts to join room '{}' that is locked (pending configuration confirmation). Sending an error.", user.getAddress(), this.getJID() );
+            final Presence presenceItemNotFound = new Presence(Presence.Type.error);
             presenceItemNotFound.setError(PacketError.Condition.item_not_found);
             presenceItemNotFound.setFrom(role.getRoleAddress());
-            joinRole.send(presenceItemNotFound);
 
+            // Not needed to create a defensive copy of the stanza. It's not used anywhere else.
+            joinRole.send(presenceItemNotFound);
         }
+
+        sendRoomHistoryAfterJoin( user, joinRole, historyRequest );
+        sendRoomSubjectAfterJoin( user, joinRole );
+
+        if (!clientOnlyJoin) {
+            // Update the date when the last occupant left the room
+            setEmptyDate(null);
+            // Fire event that occupant joined the room
+            MUCEventDispatcher.occupantJoined(getRole().getRoleAddress(), user.getAddress(), joinRole.getNickname());
+        }
+        return joinRole;
+    }
+
+    /**
+     * Sends the room history to a user that just joined the room.
+     */
+    private void sendRoomHistoryAfterJoin( @Nonnull final LocalMUCUser user, @Nonnull MUCRole joinRole, @Nullable HistoryRequest historyRequest )
+    {
         if (historyRequest == null) {
-            Iterator<Message> history = roomHistory.getMessageHistory();
+            Log.trace( "Sending default room history to user '{}' that joined room '{}'.", user.getAddress(), this.getJID() );
+            final Iterator<Message> history = roomHistory.getMessageHistory();
             while (history.hasNext()) {
-                joinRole.send(history.next());
+                // OF-2163: Prevent modifying the original history stanza (that can be retrieved by others later) by making a defensive copy.
+                //          This prevents the stanzas in the room history to have a 'to' address for the last user that it was sent to.
+                final Message message = history.next().createCopy();
+                joinRole.send(message);
             }
-        }
-        else {
+        } else {
+            Log.trace( "Sending user-requested room history to user '{}' that joined room '{}'.", user.getAddress(), this.getJID() );
             historyRequest.sendHistory(joinRole, roomHistory);
         }
-        Message roomSubject = roomHistory.getChangedSubject();
+    }
 
-        // 7.2.15 If there is no subject set, the room MUST return an empty <subject/> element.
-        if (roomSubject == null) {
+    /**
+     * Sends the room subject to a user that just joined the room.
+     */
+    private void sendRoomSubjectAfterJoin( @Nonnull final LocalMUCUser user, @Nonnull MUCRole joinRole )
+    {
+        Log.trace( "Sending room subject to user '{}' that joined room '{}'.", user.getAddress(), this.getJID() );
+
+        Message roomSubject = roomHistory.getChangedSubject();
+        if (roomSubject != null) {
+            // OF-2163: Prevent modifying the original subject stanza (that can be retrieved by others later) by making a defensive copy.
+            //          This prevents the stanza kept in memory to have the 'to' address for the last user that it was sent to.
+            roomSubject.createCopy();
+        } else {
+            // 7.2.15 If there is no subject set, the room MUST return an empty <subject/> element.
             roomSubject = new Message();
             roomSubject.setFrom( this.getJID() );
             roomSubject.setType( Message.Type.groupchat );
@@ -725,15 +771,244 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
             roomSubject.getElement().addElement( "subject" );
         }
         joinRole.send(roomSubject);
+    }
 
-        if (!clientOnlyJoin) {
-            // Update the date when the last occupant left the room
-            setEmptyDate(null);
-            // Fire event that occupant joined the room
-            MUCEventDispatcher.occupantJoined(getRole().getRoleAddress(),
-                    user.getAddress(), joinRole.getNickname());
-       }
-        return joinRole;
+    boolean alreadyJoinedWithThisNick( @Nonnull LocalMUCUser user, @Nonnull String nickname )
+    {
+        if (occupantsByNickname.containsKey(nickname.toLowerCase())) {
+            List<MUCRole> occupants = occupantsByNickname.get(nickname.toLowerCase());
+            // Is this client already joined with this nickname?
+            for (MUCRole mucRole : occupants) {
+                if (mucRole.getUserAddress().equals(user.getAddress())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Checks all preconditions for joining a room. If one of them fails, an Exception is thrown.
+     */
+    private void checkJoinRoomPreconditions(
+            @Nonnull final LocalMUCUser user,
+            @Nonnull final String nickname,
+            @Nonnull final MUCRole.Affiliation affiliation,
+            @Nullable final String password,
+            @Nonnull final Presence presence)
+        throws ServiceUnavailableException, RoomLockedException, UserAlreadyExistsException, UnauthorizedException, ConflictException, NotAcceptableException, ForbiddenException, RegistrationRequiredException
+    {
+        Log.debug( "Checking all preconditions for user '{}' to join room '{}'.", user.getAddress(), this.getJID() );
+
+        checkJoinRoomPreconditionDelegate( user );
+
+        // If the room has a limit of max user then check if the limit has been reached
+        checkJoinRoomPreconditionMaxOccupants( user );
+
+        // If the room is locked and this user is not an owner raise a RoomLocked exception
+        checkJoinRoomPreconditionLocked( user );
+
+        // Check if the nickname is already used in the room
+        checkJoinRoomPreconditionNicknameInUse( user, nickname );
+
+        // If the room is password protected and the provided password is incorrect raise a
+        // Unauthorized exception - unless the JID that is joining is a system admin.
+        checkJoinRoomPreconditionPasswordProtection( user, password );
+
+        // If another user attempts to join the room with a nickname reserved by the first user
+        // raise a ConflictException
+        checkJoinRoomPreconditionNicknameReserved( user, nickname );
+
+        checkJoinRoomPreconditionRestrictedToNickname( user, nickname );
+
+        // Check if the user can join the room.
+        checkJoinRoomPreconditionIsOutcast( user, affiliation );
+
+        // If the room is members-only and the user is not a member. Raise a "Registration Required" exception.
+        checkJoinRoomPreconditionMemberOnly( user, affiliation );
+
+        Log.debug( "All preconditions for user '{}' to join room '{}' have been met. User can join the room.", user.getAddress(), this.getJID() );
+    }
+
+    private void checkJoinRoomPreconditionDelegate( @Nonnull final LocalMUCUser user ) throws UnauthorizedException
+    {
+        boolean canJoin = true;
+        if (((MultiUserChatServiceImpl)mucService).getMUCDelegate() != null) {
+            if (!((MultiUserChatServiceImpl)mucService).getMUCDelegate().joiningRoom(this, user.getAddress())) {
+                // Delegate said no, reject join.
+                canJoin = false;
+            }
+        }
+        Log.trace( "{} Room join precondition 'delegate': User '{}' {} join room '{}'.", canJoin ? "PASS" : "FAIL", user.getAddress(), canJoin ? "can" : "cannot", this.getJID() );
+        if (!canJoin) {
+            throw new UnauthorizedException();
+        }
+    }
+
+    /**
+     * Checks if the room has a limit of max user, then check if the limit has been reached
+     *
+     * @param user The user that attempts to join.
+     * @throws ServiceUnavailableException when joining is prevented by virtue of the room having reached maximum capacity.
+     */
+    private void checkJoinRoomPreconditionMaxOccupants( @Nonnull final LocalMUCUser user ) throws ServiceUnavailableException
+    {
+        final boolean canJoin = canJoinRoom(user);
+        Log.trace( "{} Room join precondition 'max occupants': User '{}' {} join room '{}'.", canJoin ? "PASS" : "FAIL", user.getAddress(), canJoin ? "can" : "cannot", this.getJID() );
+        if (!canJoinRoom(user)) {
+            throw new ServiceUnavailableException( "This room has reached its maximum number of occupants." );
+        }
+    }
+
+    /**
+     * Checks if the room is locked and this user is not an owner
+     *
+     * @param user The user that attempts to join.
+     * @throws RoomLockedException when joining is prevented by virtue of the room being locked.
+     */
+    private void checkJoinRoomPreconditionLocked( @Nonnull final LocalMUCUser user ) throws RoomLockedException
+    {
+        boolean canJoin = true;
+        final JID bareJID = user.getAddress().asBareJID();
+        boolean isOwner = owners.includes(bareJID);
+        if (isLocked()) {
+            if (!isOwner) {
+                canJoin = false;
+            }
+        }
+        Log.trace( "{} Room join precondition 'room locked': User '{}' {} join room '{}'.", canJoin ? "PASS" : "FAIL", user.getAddress(), canJoin ? "can" : "cannot", this.getJID() );
+        if (!canJoin) {
+            throw new RoomLockedException( "This room is locked (and you are not an owner)." );
+        }
+    }
+
+    /**
+     * Checks if the nickname that the user attempts to use is already used by someone else in the room.
+     *
+     * @param user The user that attempts to join.
+     * @param nickname The nickname that the user is attempting to use
+     * @throws UserAlreadyExistsException when joining is prevented by virtue of someone else in the room using the nickname.
+     */
+    private void checkJoinRoomPreconditionNicknameInUse( @Nonnull final LocalMUCUser user, @Nonnull String nickname ) throws UserAlreadyExistsException
+    {
+        boolean canJoin = true;
+        final JID bareJID = user.getAddress().asBareJID();
+        if (occupantsByNickname.containsKey(nickname.toLowerCase())) {
+            List<MUCRole> occupants = occupantsByNickname.get(nickname.toLowerCase());
+            MUCRole occupant = occupants.size() > 0 ? occupants.get(0) : null;
+            if (occupant != null && !occupant.getUserAddress().toBareJID().equals(bareJID.toBareJID())) {
+                // Nickname is already used, and not by the same JID
+                canJoin = false;
+            }
+        }
+        Log.trace( "{} Room join precondition 'nickname in use': User '{}' {} join room '{}'.", canJoin ? "PASS" : "FAIL", user.getAddress(), canJoin ? "can" : "cannot", this.getJID() );
+        if (!canJoin) {
+            throw new UserAlreadyExistsException( "Someone else in the room uses the nickname that you want to use." );
+        }
+    }
+
+    /**
+     * Checks if the user provided the correct password, if applicable.
+     *
+     * @param user The user that attempts to join.
+     * @throws UnauthorizedException when joining is prevented by virtue of password protection.
+     */
+    private void checkJoinRoomPreconditionPasswordProtection( @Nonnull final LocalMUCUser user, @Nullable String providedPassword ) throws UnauthorizedException
+    {
+        boolean canJoin = true;
+        final JID bareJID = user.getAddress().asBareJID();
+        if (isPasswordProtected()) {
+            final boolean isCorrectPassword = (providedPassword != null && providedPassword.equals(getPassword()));
+            final boolean isSysadmin = mucService.isSysadmin(bareJID);
+            final boolean requirePassword = !isSysadmin || mucService.isPasswordRequiredForSysadminsToJoinRoom();
+            if (!isCorrectPassword && requirePassword ) {
+                canJoin = false;
+            }
+        }
+        Log.trace( "{} Room join precondition 'password protection': User '{}' {} join room '{}'.", canJoin ? "PASS" : "FAIL", user.getAddress(), canJoin ? "can" : "cannot", this.getJID() );
+        if (!canJoin) {
+            throw new UnauthorizedException( "You did not supply the correct password needed to join this room." );
+        }
+    }
+
+    /**
+     * Checks if the nickname that the user attempts to use has been reserved by a(nother) member of the room.
+     *
+     * @param user The user that attempts to join.
+     * @param nickname The nickname that the user is attempting to use
+     * @throws ConflictException when joining is prevented by virtue of someone else in the room having reserved the nickname.
+     */
+    private void checkJoinRoomPreconditionNicknameReserved( @Nonnull final LocalMUCUser user, @Nonnull final String nickname ) throws ConflictException
+    {
+        boolean canJoin = true;
+        final JID bareJID = user.getAddress().asBareJID();
+        if (members.containsValue(nickname.toLowerCase())) {
+            if (!nickname.toLowerCase().equals(members.get(bareJID))) {
+                canJoin = false;
+            }
+        }
+        Log.trace( "{} Room join precondition 'nickname reserved': User '{}' {} join room '{}'.", canJoin ? "PASS" : "FAIL", user.getAddress(), canJoin ? "can" : "cannot", this.getJID() );
+        if (!canJoin) {
+            throw new ConflictException( "Someone else in the room has reserved the nickname that you want to use." );
+        }
+    }
+
+    /**
+     * Checks, when joins are restricted to reserved nicknames, if the nickname that the user attempts to use is the
+     * nickname that has been reserved by that room.
+     *
+     * @param user The user that attempts to join.
+     * @param nickname The nickname that the user is attempting to use
+     * @throws NotAcceptableException when joining is prevented by virtue of using an incorrect nickname.
+     */
+    private void checkJoinRoomPreconditionRestrictedToNickname( @Nonnull final LocalMUCUser user, @Nonnull final String nickname ) throws NotAcceptableException
+    {
+        boolean canJoin = true;
+        String reservedNickname = null;
+        final JID bareJID = user.getAddress().asBareJID();
+        if (isLoginRestrictedToNickname()) {
+            reservedNickname = members.get(bareJID);
+            if (reservedNickname != null && !nickname.toLowerCase().equals(reservedNickname)) {
+                canJoin = false;
+            }
+        }
+
+        Log.trace( "{} Room join precondition 'restricted to nickname': User '{}' {} join room {}. Reserved nickname: '{}'.", canJoin ? "PASS" : "FAIL", user.getAddress(), canJoin ? "can" : "cannot", this.getJID(), reservedNickname );
+        if (!canJoin) {
+            throw new NotAcceptableException( "This room is configured to restrict joins to reserved nicknames. The nickname that you supplied was not the nickname that you reserved for this room, which is: " + reservedNickname );
+        }
+    }
+
+    /**
+     * Checks if the person that attempts to join has been banned from the room.
+     *
+     * @param user The user that attempts to join.
+     * @throws ForbiddenException when joining is prevented by virtue of the user being banned.
+     */
+    private void checkJoinRoomPreconditionIsOutcast( @Nonnull final LocalMUCUser user, @Nonnull final MUCRole.Affiliation affiliation ) throws ForbiddenException
+    {
+        boolean canJoin = affiliation != MUCRole.Affiliation.outcast;
+
+        Log.trace( "{} Room join precondition 'is outcast': User '{}' {} join room '{}'.", canJoin ? "PASS" : "FAIL", user.getAddress(), canJoin ? "can" : "cannot", this.getJID() );
+        if (!canJoin) {
+            throw new ForbiddenException( "You have been banned (marked as 'outcast') from this room." );
+        }
+    }
+
+    /**
+     * Checks if the person that attempts to join is a member of a member-only room.
+     *
+     * @param user The user that attempts to join.
+     * @throws RegistrationRequiredException when joining is prevented by virtue of the user joining a member-only room without being a member.
+     */
+    private void checkJoinRoomPreconditionMemberOnly( @Nonnull final LocalMUCUser user, @Nonnull final MUCRole.Affiliation affiliation ) throws RegistrationRequiredException
+    {
+        boolean canJoin = !isMembersOnly() || Arrays.asList( MUCRole.Affiliation.admin, MUCRole.Affiliation.owner, MUCRole.Affiliation.member ).contains( affiliation );
+
+        Log.trace( "{} Room join precondition 'member-only': User '{}' {} join room '{}'.", canJoin ? "PASS" : "FAIL", user.getAddress(), canJoin ? "can" : "cannot", this.getJID() );
+        if (!canJoin) {
+            throw new RegistrationRequiredException( "This room is member-only, but you are not a member." );
+        }
     }
 
     /**
@@ -762,35 +1037,114 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
      *
      * @param joinRole the role of the new occupant in the room.
      */
-    private void sendInitialPresences(MUCRole joinRole) {
-        for (MUCRole occupant : occupantsByFullJID.values()) {
+    void sendInitialPresencesToNewOccupant(MUCRole joinRole) {
+        if (!JOIN_PRESENCE_ENABLE.getValue()) {
+            Log.debug( "Skip exchanging presence between existing occupants of room '{}' and new occupant '{}' as it is disabled by configuration.", joinRole.getChatRoom().getJID(), joinRole.getUserAddress() );
+            return;
+        }
+
+        Log.trace( "Send presence of existing occupants of room '{}' to new occupant '{}'.", joinRole.getChatRoom().getJID(), joinRole.getUserAddress() );
+        for ( final MUCRole occupant : occupantsByFullJID.values() ) {
             if (occupant == joinRole) {
                 continue;
             }
-            Presence occupantPresence = occupant.getPresence();
+
             // Skip to the next occupant if we cannot send presence of this occupant
-            if (hasToCheckRoleToBroadcastPresence()) {
-                Element frag = occupantPresence.getChildElement("x",
-                        "http://jabber.org/protocol/muc#user");
-                // Check if we can broadcast the presence for this role
-                if (!canBroadcastPresence(frag.element("item").attributeValue("role"))) {
-                    continue;
-                }
+            if (!canBroadcastPresence(occupant.getRole())) {
+                continue;
             }
-            // Don't include the occupant's JID if the room is semi-anon and the new occupant
-            // is not a moderator
+
+            final Presence occupantPresence = occupant.getPresence().createCopy(); // defensive copy to prevent modifying the original.
             if (!canAnyoneDiscoverJID() && MUCRole.Role.moderator != joinRole.getRole()) {
-                occupantPresence = occupantPresence.createCopy();
-                Element frag = occupantPresence.getChildElement("x",
-                        "http://jabber.org/protocol/muc#user");
+                // Don't include the occupant's JID if the room is semi-anon and the new occupant is not a moderator
+                final Element frag = occupantPresence.getChildElement("x", "http://jabber.org/protocol/muc#user");
                 frag.element("item").addAttribute("jid", null);
             }
             joinRole.send(occupantPresence);
         }
     }
 
+    /**
+     * Adds the role of the occupant from all the internal occupants collections.
+     *
+     * @param role the role to add.
+     */
+    void addOccupantRole( @Nonnull MUCRole role )
+    {
+        Log.trace( "Add occupant to room {}: {}", this.getJID(), role );
+        lock.writeLock().lock();
+        try
+        {
+            // Add the new user as an occupant of this room.
+            occupantsByNickname.compute(role.getNickname().toLowerCase(), ( nick, occupants ) -> {
+                List<MUCRole> ret = occupants != null ? occupants : new CopyOnWriteArrayList<>();
+                ret.add(role);
+                return ret;
+            });
+
+            // Update the tables of occupants based on the bare and full JID.
+            occupantsByBareJID.compute(role.getUserAddress().asBareJID(), ( jid, occupants ) -> {
+                List<MUCRole> ret = occupants != null ? occupants : new CopyOnWriteArrayList<>();
+                ret.add(role);
+                return ret;
+            });
+            occupantsByFullJID.put(role.getUserAddress(), role);
+
+            Log.trace( "Finished adding occupant to room {}: {}", this.getJID(), role );
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Sends presence of a leaving occupant to other occupants.
+     *
+     * @param leaveRole the role of the occupant that is leaving.
+     */
+    CompletableFuture<Void> sendLeavePresenceToExistingOccupants(MUCRole leaveRole) {
+        // Send the presence of this new occupant to existing occupants
+        Log.trace( "Send presence of leaving occupant '{}' to existing occupants of room '{}'.", leaveRole.getUserAddress(), leaveRole.getChatRoom().getJID() );
+        try {
+            final Presence originalPresence = leaveRole.getPresence();
+            final Presence presence = originalPresence.createCopy(); // Defensive copy to not modify the original.
+            presence.setType(Presence.Type.unavailable);
+            presence.setStatus(null);
+            // Change (or add) presence information about roles and affiliations
+            Element childElement = presence.getChildElement("x", "http://jabber.org/protocol/muc#user");
+            if (childElement == null) {
+                childElement = presence.addChildElement("x", "http://jabber.org/protocol/muc#user");
+            }
+            Element item = childElement.element("item");
+            if (item == null) {
+                item = childElement.addElement("item");
+            }
+            item.addAttribute("role", "none");
+
+            // Check to see if the user's original role is one we should broadcast a leave packet for.
+            if(!canBroadcastPresence(leaveRole.getRole())){
+                // Inform the leaving user that he/she has left the room
+                leaveRole.send(presence);
+                return CompletableFuture.completedFuture(null);
+            }
+            else {
+                if (getOccupantsByNickname(leaveRole.getNickname()).size() <= 1) {
+                    // Inform the rest of the room occupants that the user has left the room
+                    if (JOIN_PRESENCE_ENABLE.getValue()) {
+                        return broadcastPresence(presence, false, leaveRole);
+                    }
+                }
+            }
+        }
+        catch (Exception e) {
+            Log.error( "An exception occurred while sending leave presence of occupant '"+leaveRole.getUserAddress()+"' to the other occupants of room: '"+leaveRole.getChatRoom().getJID()+"'.", e);
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
     public void occupantAdded(OccupantAddedEvent event) {
         // Create a proxy for the occupant that joined the room from another cluster node
+        Log.trace( "Processing occupant added event for room {}: user-address {}, nickname {}, from node {}", this.getJID(), event.getUserAddress(), event.getNickname(), event.getNodeID() );
+
         RemoteMUCRole joinRole = new RemoteMUCRole(mucService, event);
         JID bareJID = event.getUserAddress().asBareJID();
         String nickname = event.getNickname();
@@ -818,6 +1172,8 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
                 // Fire event that occupant joined the room
                 MUCEventDispatcher.occupantJoined(getRole().getRoleAddress(), event.getUserAddress(), joinRole.getNickname());
             }
+
+            Log.trace( "Finished processing occupant added event for room {}: user-address {}, nickname {}, from node {}", this.getJID(), event.getUserAddress(), event.getNickname(), event.getNodeID() );
         }
         finally {
             lock.writeLock().unlock();
@@ -834,61 +1190,36 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
 
     @Override
     public void leaveRoom(MUCRole leaveRole) {
-        if (leaveRole.isLocal()) {
-            // Ask other cluster nodes to remove occupant from room
-            OccupantLeftEvent event = new OccupantLeftEvent(this, leaveRole);
-            CacheFactory.doClusterTask(event);
-        }
-
-        try {
-            Presence originalPresence = leaveRole.getPresence();
-            Presence presence = originalPresence.createCopy();
-            presence.setType(Presence.Type.unavailable);
-            presence.setStatus(null);
-            // Change (or add) presence information about roles and affiliations
-            Element childElement = presence.getChildElement("x", "http://jabber.org/protocol/muc#user");
-            if (childElement == null) {
-                childElement = presence.addChildElement("x", "http://jabber.org/protocol/muc#user");
-            }
-            Element item = childElement.element("item");
-            if (item == null) {
-                item = childElement.addElement("item");
-            }
-            item.addAttribute("role", "none");
-
-            // Check to see if the user's original presence is one we should broadcast
-            // a leave packet for. Need to check the original presence because we just
-            // set the role to "none" above, which is always broadcast.
-            if(!shouldBroadcastPresence(originalPresence)){
-                // Inform the leaving user that he/she has left the room
-                leaveRole.send(presence);
-            }
-            else {
-                if (getOccupantsByNickname(leaveRole.getNickname()).size() <= 1) {
-                    // Inform the rest of the room occupants that the user has left the room
-                    broadcastPresence(presence, false);
+        sendLeavePresenceToExistingOccupants(leaveRole)
+            .thenRunAsync( () -> {
+                if (leaveRole.isLocal()) {
+                    // Ask other cluster nodes to remove occupant from room
+                    OccupantLeftEvent event = new OccupantLeftEvent(this, leaveRole);
+                    CacheFactory.doClusterTask(event);
                 }
-            }
-        }
-        catch (Exception e) {
-            Log.error(e.getMessage(), e);
-        }
 
-        // Remove occupant from room and destroy room if empty and not persistent
-        OccupantLeftEvent event = new OccupantLeftEvent(this, leaveRole);
-        event.setOriginator(true);
-        event.run();
+                // Remove occupant from room and destroy room if empty and not persistent
+                OccupantLeftEvent event = new OccupantLeftEvent(this, leaveRole);
+                event.setOriginator(true);
+                event.run();
+            }
+        );
     }
 
     public void leaveRoom(OccupantLeftEvent event) {
-        MUCRole leaveRole = event.getRole();
-        if (leaveRole == null) {
-            return;
-        }
         lock.writeLock().lock();
         try {
+            MUCRole leaveRole = event.getRole();
+            if (leaveRole == null) {
+                return;
+            }
             // Removes the role from the room
-            removeOccupantRole(leaveRole, event.isOriginator());
+            removeOccupantRole(leaveRole);
+
+            if ( event.isOriginator() ) {
+                // Fire event that occupant left the room
+                MUCEventDispatcher.occupantLeft(leaveRole.getRoleAddress(), leaveRole.getUserAddress(), leaveRole.getNickname());
+            }
 
             // TODO Implement this: If the room owner becomes unavailable for any reason before
             // submitting the form (e.g., a lost connection), the service will receive a presence
@@ -918,13 +1249,30 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     /**
+     * Sends presence of new occupant to existing occupants.
+     *
+     * @param joinRole the role of the new occupant in the room.
+     */
+    CompletableFuture<Void> sendInitialPresenceToExistingOccupants( MUCRole joinRole) {
+        // Send the presence of this new occupant to existing occupants
+        Log.trace( "Send presence of new occupant '{}' to existing occupants of room '{}'.", joinRole.getUserAddress(), joinRole.getChatRoom().getJID() );
+        try {
+            final Presence joinPresence = joinRole.getPresence().createCopy();
+            return broadcastPresence(joinPresence, true, joinRole);
+        } catch (Exception e) {
+            Log.error( "An exception occurred while sending initial presence of new occupant '"+joinRole.getUserAddress()+"' to the existing occupants of room: '"+joinRole.getChatRoom().getJID()+"'.", e);
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    /**
      * Removes the role of the occupant from all the internal occupants collections. The role will
      * also be removed from the user's roles.
      *
      * @param leaveRole the role to remove.
-     * @param originator true if this JVM is the one that originated the event.
      */
-    private void removeOccupantRole(MUCRole leaveRole, boolean originator) {
+    void removeOccupantRole(MUCRole leaveRole) {
+        Log.trace( "Remove occupant from room {}: {}", this.getJID(), leaveRole );
         JID userAddress = leaveRole.getUserAddress();
         // Notify the user that he/she is no longer in the room
         leaveRole.destroy();
@@ -944,14 +1292,15 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
                 return occupants.isEmpty() ? null : occupants;
             });
 
-            occupantsByFullJID.remove(userAddress);
+            // Remove this MucRole only if it is the same MucRole as the leaveRole, because it is possible that
+            // a client on a cluster node rejoins and the OccupantAddedEvent arrives before the OccupantLeftEvent from
+            // the previous cluster node.
+            occupantsByFullJID.computeIfPresent(userAddress,(jid, mucRole) -> mucRole.equals(leaveRole) ? null : mucRole);
+
+            Log.trace( "Finished removing occupant from room {}: {}", this.getJID(), leaveRole );
         }
         finally {
             lock.writeLock().unlock();
-        }
-        if (originator) {
-            // Fire event that occupant left the room
-            MUCEventDispatcher.occupantLeft(getRole().getRoleAddress(), userAddress, nickname);
         }
     }
 
@@ -961,6 +1310,8 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         Collection<MUCRole> removedRoles = new CopyOnWriteArrayList<>();
         lock.writeLock().lock();
         try {
+            fmucHandler.stop();
+
             boolean hasRemoteOccupants = false;
             // Remove each occupant
             for (MUCRole leaveRole : occupantsByFullJID.values()) {
@@ -974,7 +1325,12 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
                     else {
                         hasRemoteOccupants = true;
                     }
-                    removeOccupantRole(leaveRole, destroyRequest.isOriginator());
+                    removeOccupantRole(leaveRole);
+
+                    if (  destroyRequest.isOriginator() ) {
+                        // Fire event that occupant left the room
+                        MUCEventDispatcher.occupantLeft(leaveRole.getRoleAddress(), leaveRole.getUserAddress(), leaveRole.getNickname());
+                    }
                 }
             }
             endTime = System.currentTimeMillis();
@@ -996,13 +1352,12 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         for (MUCRole removedRole : removedRoles) {
             try {
                 // Send a presence stanza of type "unavailable" to the occupant
-                Presence presence = createPresence(Presence.Type.unavailable);
+                final Presence presence = createPresence(Presence.Type.unavailable);
                 presence.setFrom(removedRole.getRoleAddress());
 
                 // A fragment containing the x-extension for room destruction.
-                Element fragment = presence.addChildElement("x",
-                        "http://jabber.org/protocol/muc#user");
-                Element item = fragment.addElement("item");
+                final Element fragment = presence.addChildElement("x","http://jabber.org/protocol/muc#user");
+                final Element item = fragment.addElement("item");
                 item.addAttribute("affiliation", "none");
                 item.addAttribute("role", "none");
                 if (alternateJID != null) {
@@ -1015,6 +1370,8 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
                     }
                     destroy.addElement("reason").setText(reason);
                 }
+
+                // Not needed to create a defensive copy of the stanza. It's not used anywhere else.
                 removedRole.send(presence);
             }
             catch (Exception e) {
@@ -1037,7 +1394,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     @Override
-    public Presence createPresence(Presence.Type presenceType) throws UnauthorizedException {
+    public Presence createPresence(Presence.Type presenceType) {
         Presence presence = new Presence();
         presence.setType(presenceType);
         presence.setFrom(role.getRoleAddress());
@@ -1050,7 +1407,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         message.setType(Message.Type.groupchat);
         message.setBody(msg);
         message.setFrom(role.getRoleAddress());
-        broadcast(message);
+        broadcast(message, role);
     }
 
     @Override
@@ -1061,7 +1418,10 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         }
         // Send the message to all occupants
         message.setFrom(senderRole.getRoleAddress());
-        send(message);
+        if (canAnyoneDiscoverJID) {
+            addRealJidToMessage(message, senderRole);
+        }
+        send(message, senderRole);
         // Fire event that message was received by the room
         MUCEventDispatcher.messageReceived(getRole().getRoleAddress(), senderRole.getUserAddress(),
                 senderRole.getNickname(), message);
@@ -1085,24 +1445,35 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         if (occupants == null || occupants.size() == 0) {
             throw new NotFoundException();
         }
-        for (MUCRole occupant : occupants) {
-            packet.setFrom(senderRole.getRoleAddress());
-            occupant.send(packet);
-            if(packet instanceof Message) {
-               Message message = (Message) packet;
-                 MUCEventDispatcher.privateMessageRecieved(occupant.getUserAddress(), senderRole.getUserAddress(),
-                         message);
+
+        // OF-2163: Prevent modifying the original stanza (that can be used by unrelated code, after this method returns) by making a defensive copy.
+        final Packet stanza = packet.createCopy();
+        if (canAnyoneDiscoverJID && stanza instanceof Message) {
+            addRealJidToMessage((Message)stanza, senderRole);
+        }
+        stanza.setFrom(senderRole.getRoleAddress());
+
+        // Sending the stanza will modify it. Make sure that the event listeners that are triggered after sending
+        // the stanza don't get the 'real' address from the recipient.
+        final Packet immutable = stanza.createCopy();
+
+        // Forward it to each occupant.
+        for (final MUCRole occupant : occupants) {
+            occupant.send(stanza); // Use the stanza copy to send data. The 'to' address of this object will be changed by sending it.
+            if (stanza instanceof Message) {
+                // Use an unmodified copy of the stanza (with the original 'to' address) when invoking event listeners (OF-2163)
+                MUCEventDispatcher.privateMessageRecieved(occupant.getUserAddress(), senderRole.getUserAddress(), (Message) immutable);
             }
         }
     }
 
     @Override
-    public void send(Packet packet) {
+    public void send(@Nonnull Packet packet, @Nonnull MUCRole sender) {
         if (packet instanceof Message) {
-            broadcast((Message)packet);
+            broadcast((Message)packet, sender);
         }
         else if (packet instanceof Presence) {
-            broadcastPresence((Presence)packet, false);
+            broadcastPresence((Presence)packet, false, sender);
         }
         else if (packet instanceof IQ) {
             IQ reply = IQ.createResultIQ((IQ) packet);
@@ -1113,26 +1484,6 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     /**
-     * Checks the role of the sender and returns true if the given presence should be broadcasted
-     *
-     * @param presence The presence to check
-     * @return true if the presence should be broadcast to the rest of the room
-     */
-    private boolean shouldBroadcastPresence(Presence presence){
-        if (presence == null) {
-            return false;
-        }
-        if (hasToCheckRoleToBroadcastPresence()) {
-            Element frag = presence.getChildElement("x", "http://jabber.org/protocol/muc#user");
-            // Check if we can broadcast the presence for this role
-            if (!canBroadcastPresence(frag.element("item").attributeValue("role"))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
      * Broadcasts the specified presence to all room occupants. If the presence belongs to a
      * user whose role cannot be broadcast then the presence will only be sent to the presence's
      * user. On the other hand, the JID of the user that sent the presence won't be included if the
@@ -1140,84 +1491,106 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
      *
      * @param presence the presence to broadcast.
      * @param isJoinPresence If the presence is sent in the context of joining the room.
+     * @param sender The role of the entity that initiated the presence broadcast
      */
-    private void broadcastPresence(Presence presence, boolean isJoinPresence) {
+    private CompletableFuture<Void> broadcastPresence( Presence presence, boolean isJoinPresence, @Nonnull MUCRole sender) {
         if (presence == null) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
-        if (!shouldBroadcastPresence(presence)) {
+
+        if (!presence.getFrom().asBareJID().equals(this.getJID())) {
+            // At this point, the 'from' address of the to-be broadcasted stanza can be expected to be the role-address
+            // of the subject, or more broadly: it's bare JID representation should match that of the room. If that's not
+            // the case then there's a bug in Openfire. Catch this here, as otherwise, privacy-sensitive data is leaked.
+            // See: OF-2152
+            throw new IllegalArgumentException("Broadcasted presence stanza's 'from' JID " + presence.getFrom() + " does not match room JID: " + this.getJID());
+        }
+
+        // Create a defensive copy, to prevent modifications to leak back to the invoker.
+        final Presence stanza = presence.createCopy();
+
+        // Some clients send a presence update to the room, rather than to their own nickname.
+        if ( JiveGlobals.getBooleanProperty("xmpp.muc.presence.overwrite-to-room", true) && stanza.getTo() != null && stanza.getTo().getResource() == null && sender.getRoleAddress() != null) {
+            stanza.setTo( sender.getRoleAddress() );
+        }
+
+        if (!canBroadcastPresence(sender.getRole())) {
             // Just send the presence to the sender of the presence
-            try {
-                for (MUCRole occupant : getOccupantsByNickname(presence.getFrom().getResource())) {
-                    occupant.send(presence);
-                }
-            }
-            catch (UserNotFoundException e) {
-                // Do nothing
-            }
-            return;
+            sender.send(stanza);
+            return CompletableFuture.completedFuture(null);
         }
 
-        // Broadcast presence to occupants hosted by other cluster nodes
-        BroadcastPresenceRequest request = new BroadcastPresenceRequest(this, presence, isJoinPresence);
-        CacheFactory.doClusterTask(request);
+        // If FMUC is active, propagate the presence through FMUC first. Note that when a master-slave mode is active,
+        // we need to wait for an echo back, before the message can be broadcasted locally. The 'propagate' method will
+        // return a CompletableFuture object that is completed as soon as processing can continue.
+        return fmucHandler.propagate(stanza, sender)
+            .thenRunAsync(() -> {
+                              // Broadcast presence to occupants hosted by other cluster nodes
+                              BroadcastPresenceRequest request = new BroadcastPresenceRequest(this, sender, stanza, isJoinPresence);
+                              CacheFactory.doClusterTask(request);
 
-        // Broadcast presence to occupants connected to this JVM
-        request = new BroadcastPresenceRequest(this, presence, isJoinPresence);
-        request.setOriginator(true);
-        request.run();
+                              // Broadcast presence to occupants connected to this JVM
+                              request = new BroadcastPresenceRequest(this, sender, stanza, isJoinPresence);
+                              request.setOriginator(true);
+                              request.run();
+                          }
+            );
     }
 
-    public void broadcast(BroadcastPresenceRequest presenceRequest) {
-        String jid = null;
-        Presence presence = presenceRequest.getPresence();
-        JID to = presence.getTo();
-        Element frag = presence.getChildElement("x", "http://jabber.org/protocol/muc#user");
-        // Don't include the occupant's JID if the room is semi-anon and the new occupant
-        // is not a moderator
-        if (!canAnyoneDiscoverJID()) {
-            jid = frag.element("item").attributeValue("jid");
+    /**
+     * Broadcasts the presence stanza as captured by the argument to all occupants that are local to the JVM (in other
+     * words, it excludes occupants that are connected to other cluster nodes, as well as occupants connected via FMUC).
+     *
+     * @param presenceRequest The presence stanza
+     */
+    public void broadcast(@Nonnull BroadcastPresenceRequest presenceRequest)
+    {
+        Log.debug("Broadcasting presence update in room {} for occupant {}", this.getName(), presenceRequest.getPresence().getFrom() );
+
+        final Presence presence = presenceRequest.getPresence();
+
+        if (!presence.getFrom().asBareJID().equals(this.getJID())) {
+            // At this point, the 'from' address of the to-be broadcasted stanza can be expected to be the role-address
+            // of the subject, or more broadly: it's bare JID representation should match that of the room. If that's not
+            // the case then there's a bug in Openfire. Catch this here, as otherwise, privacy-sensitive data is leaked.
+            // See: OF-2152
+            throw new IllegalArgumentException("Broadcasted presence stanza's 'from' JID " + presence.getFrom() + " does not match room JID: " + this.getJID());
         }
-        for (MUCRole occupant : occupantsByFullJID.values()) {
+
+        // Three distinct flavors of the presence stanzas can be sent:
+        // 1. The original stanza (that includes the real JID of the user), usable when the room is not semi-anon or when the occupant is a moderator.
+        // 2. One that does not include the real JID of the user (if the room is semi-anon and the occupant isn't a moderator)
+        // 3. One that is reflected to the joining user (this stanza has additional status codes, signalling 'self-presence')
+        final Presence nonAnonPresence = presence.createCopy(); // create a copy, as the 'to' will be overwritten when dispatched!
+        final Presence anonPresence = createAnonCopy(presenceRequest);
+        final Presence selfPresence = createSelfPresenceCopy(presenceRequest);
+
+        for (final MUCRole occupant : occupantsByFullJID.values())
+        {
             try
             {
-                if (!occupant.isLocal()) {
+                // Do not send broadcast presence to occupants hosted in other cluster nodes or other FMUC nodes.
+                if (!occupant.isLocal() || occupant.isRemoteFmuc()) {
+                    Log.trace( "Not sending presence update of '{}' to {}: This occupant is not local.", presence.getFrom(), occupant.getUserAddress() );
                     continue;
                 }
-                // Don't include the occupant's JID if the room is semi-anon and the new occupant
-                // is not a moderator
-                if (!canAnyoneDiscoverJID()) {
-                    if (MUCRole.Role.moderator == occupant.getRole()) {
-                        frag.element("item").addAttribute("jid", jid);
-                    }
-                    else {
-                        frag.element("item").addAttribute("jid", null);
-                    }
-                }
-                // Some status codes should only be included in the "self-presence", which is only sent to the user, but not to other occupants.
-                if (occupant.getPresence().getFrom().equals(to)) {
-                    Presence selfPresence = presence.createCopy();
-                    Element fragSelfPresence = selfPresence.getChildElement("x", "http://jabber.org/protocol/muc#user");
-                    fragSelfPresence.addElement("status").addAttribute("code", "110");
 
-                    // Only in the context of entering the room status code 100, 201 and 210 should be sent.
-                    // http://xmpp.org/registrar/mucstatus.html
-                    if (presenceRequest.isJoinPresence()) {
-                        boolean isRoomNew = isLocked() && creationDate.getTime() == lockedTime;
-                        if (canAnyoneDiscoverJID()) {
-                            // // XEP-0045: Example 26.
-                            // If the user is entering a room that is non-anonymous (i.e., which informs all occupants of each occupant's full JID as shown above), the service MUST warn the user by including a status code of "100" in the initial presence that the room sends to the new occupant
-                            fragSelfPresence.addElement("status").addAttribute("code", "100");
-                        }
-                        if (isRoomNew) {
-                            fragSelfPresence.addElement("status").addAttribute("code", "201");
-                        }
-                    }
-
-                    occupant.send(selfPresence);
+                // Determine what stanza flavor to send to this occupant.
+                final Presence toSend;
+                if (occupant.getPresence().getFrom().equals(presence.getTo())) {
+                    // This occupant is the subject of the stanza. Send the 'self-presence' stanza.
+                    Log.trace( "Sending self-presence of '{}' to {}", presence.getFrom(), occupant.getUserAddress() );
+                    toSend = selfPresence;
+                } else if ( !canAnyoneDiscoverJID && MUCRole.Role.moderator != occupant.getRole() ) {
+                    Log.trace( "Sending anonymized presence of '{}' to {}: The room is semi-anon, and this occupant is not a moderator.", presence.getFrom(), occupant.getUserAddress() );
+                    toSend = anonPresence;
                 } else {
-                    occupant.send(presence);
+                    Log.trace( "Sending presence of '{}' to {}", presence.getFrom(), occupant.getUserAddress() );
+                    toSend = nonAnonPresence;
                 }
+
+                // Send stanza to this occupant.
+                occupant.send(toSend);
             }
             catch ( Exception e )
             {
@@ -1226,30 +1599,124 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         }
     }
 
-    private void broadcast(Message message) {
-        // Broadcast message to occupants hosted by other cluster nodes
-        BroadcastMessageRequest request = new BroadcastMessageRequest(this, message, occupantsByFullJID.size());
-        CacheFactory.doClusterTask(request);
-
-        // Broadcast message to occupants connected to this JVM
-        request = new BroadcastMessageRequest(this, message, occupantsByFullJID.size());
-        request.setOriginator(true);
-        request.run();
+    /**
+     * Creates a copy of the presence stanza encapsulated in the argument, that is suitable to be sent to entities that
+     * have no permission to view the real JID of the sender.
+     *
+     * @param request The object encapsulating the presence to be broadcast.
+     * @return A copy of the stanza to be broadcast.
+     */
+    @Nonnull
+    private Presence createAnonCopy(@Nonnull BroadcastPresenceRequest request)
+    {
+        final Presence result = request.getPresence().createCopy();
+        final Element frag = result.getChildElement("x", "http://jabber.org/protocol/muc#user");
+        frag.element("item").addAttribute("jid", null);
+        return result;
     }
 
-    public void broadcast(BroadcastMessageRequest messageRequest) {
-        Message message = messageRequest.getMessage();
+    /**
+     * Creates a copy of the presence stanza encapsulated in the argument, that is suitable to be sent back to the
+     * entity that is the subject of the presence update (a 'self-presence'). The returned stanza contains several
+     * flags that indicate to the receiving client that the information relates to their user.
+     *
+     * @param request The object encapsulating the presence to be broadcast.
+     * @return A copy of the stanza to be broadcast.
+     */
+    @Nonnull
+    private Presence createSelfPresenceCopy(@Nonnull BroadcastPresenceRequest request)
+    {
+        final Presence result = request.getPresence().createCopy();
+        Element fragSelfPresence = result.getChildElement("x", "http://jabber.org/protocol/muc#user");
+        fragSelfPresence.addElement("status").addAttribute("code", "110");
+
+        // Only in the context of entering the room status code 100, 201 and 210 should be sent.
+        // http://xmpp.org/registrar/mucstatus.html
+        if ( request.isJoinPresence() )
+        {
+            boolean isRoomNew = isLocked() && creationDate.getTime() == lockedTime;
+            if ( canAnyoneDiscoverJID() )
+            {
+                // XEP-0045: Example 26.
+                // If the user is entering a room that is non-anonymous (i.e., which informs all occupants of each occupant's full JID as shown above),
+                // the service MUST warn the user by including a status code of "100" in the initial presence that the room sends to the new occupant
+                fragSelfPresence.addElement("status").addAttribute("code", "100");
+            }
+
+            if ( isRoomNew )
+            {
+                fragSelfPresence.addElement("status").addAttribute("code", "201");
+            }
+        }
+
+        return result;
+    }
+
+    private void broadcast(@Nonnull final Message message, @Nonnull final MUCRole sender)
+    {
+        if (!message.getFrom().asBareJID().equals(this.getJID())) {
+            // At this point, the 'from' address of the to-be broadcasted stanza can be expected to be the role-address
+            // of the subject, or more broadly: it's bare JID representation should match that of the room. If that's not
+            // the case then there's a bug in Openfire. Catch this here, as otherwise, privacy-sensitive data is leaked.
+            // See: OF-2152
+            throw new IllegalArgumentException("Broadcasted message stanza's 'from' JID " + message.getFrom() + " does not match room JID: " + this.getJID());
+        }
+
+        // If FMUC is active, propagate the message through FMUC first. Note that when a master-slave mode is active,
+        // we need to wait for an echo back, before the message can be broadcasted locally. The 'propagate' method will
+        // return a CompletableFuture object that is completed as soon as processing can continue.
+        fmucHandler.propagate( message, sender )
+            .thenRunAsync( () -> {
+                // Broadcast message to occupants hosted by other cluster nodes
+                BroadcastMessageRequest request = new BroadcastMessageRequest(this, message, occupantsByFullJID.size());
+                CacheFactory.doClusterTask(request);
+
+                // Broadcast message to occupants connected to this JVM
+                request = new BroadcastMessageRequest(this, message, occupantsByFullJID.size());
+                request.setOriginator(true);
+                request.run();
+            }
+        );
+    }
+
+    /**
+     * Broadcasts the message stanza as captured by the argument to all occupants that are local to the JVM (in other
+     * words, it excludes occupants that are connected to other cluster nodes, as well as occupants connected via FMUC).
+     *
+     * This method also ensures that the broadcasted message is logged to persistent storage, if that feature is enabled
+     * for this room
+     *
+     * @param messageRequest The message stanza
+     */
+    public void broadcast(@Nonnull final BroadcastMessageRequest messageRequest)
+    {
+        Log.debug("Broadcasting message in room {} for occupant {}", this.getName(), messageRequest.getMessage().getFrom() );
+
+        final Message message = messageRequest.getMessage();
+
+        if (!message.getFrom().asBareJID().equals(this.getJID())) {
+            // At this point, the 'from' address of the to-be broadcasted stanza can be expected to be the role-address
+            // of the sender, or more broadly: it's bare JID representation should match that of the room. If that's not
+            // the case then there's a bug in Openfire. Catch this here, as otherwise, privacy-sensitive data is leaked.
+            // See: OF-2152
+            throw new IllegalArgumentException("Broadcasted message stanza's 'from' JID " + message.getFrom() + " does not match room JID: " + this.getJID());
+        }
+
         // Add message to the room history
         roomHistory.addMessage(message);
         // Send message to occupants connected to this JVM
-        for (MUCRole occupant : occupantsByFullJID.values()) {
+
+        // Create a defensive copy of the message that will be broadcast, as the broadcast will modify it ('to' addresses
+        // will be changed), and it's undesirable to see these modifications in post-processing (OF-2163).
+        final Message mutatingCopy = message.createCopy();
+        for (final MUCRole occupant : occupantsByFullJID.values()) {
             try
             {
                 // Do not send broadcast messages to deaf occupants or occupants hosted in
-                // other cluster nodes
-                if ( occupant.isLocal() && !occupant.isVoiceOnly() )
+                // other cluster nodes or other FMUC nodes.
+                if ( occupant.isLocal() && !occupant.isVoiceOnly() && !occupant.isRemoteFmuc() )
                 {
-                    occupant.send( message );
+                    occupant.send( mutatingCopy );
                 }
             }
             catch ( Exception e )
@@ -1281,15 +1748,37 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     /**
+     * Based on XEP-0045, section 7.2.13:
+     * If the room is non-anonymous, the service MAY include an
+     * Extended Stanza Addressing (XEP-0033) [16] element that notes the original
+     * full JID of the sender by means of the "ofrom" address type
+     */
+    public void addRealJidToMessage(Message message, MUCRole role) {
+        Element addresses = DocumentHelper.createElement(QName.get("addresses", "http://jabber.org/protocol/address"));
+        Element address = addresses.addElement("address");
+        address.addAttribute("type", "ofrom");
+        address.addAttribute("jid", role.getUserAddress().toBareJID());
+        message.addExtension(new PacketExtension(addresses));
+    }
+
+    /**
      * An empty role that represents the room itself in the chatroom. Chatrooms need to be able to
      * speak (server messages) and so must have their own role in the chatroom.
      */
-    private class RoomRole implements MUCRole {
+    static class RoomRole implements MUCRole {
 
-        private MUCRoom room;
+        private final MUCRoom room;
 
-        private RoomRole(MUCRoom room) {
+        private final JID reportedFmucAddress;
+
+        RoomRole(MUCRoom room) {
             this.room = room;
+            this.reportedFmucAddress = null;
+        }
+
+        RoomRole(MUCRoom room, JID reportedFmucAddress) {
+            this.room = room;
+            this.reportedFmucAddress = reportedFmucAddress;
         }
 
         @Override
@@ -1353,7 +1842,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         @Override
         public JID getRoleAddress() {
             if (crJID == null) {
-                crJID = new JID(room.getName(), mucService.getServiceDomain(), null, true);
+                crJID = new JID(room.getName(), room.getMUCService().getServiceDomain(), null, true);
             }
             return crJID;
         }
@@ -1364,8 +1853,13 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         }
 
         @Override
+        public JID getReportedFmucAddress() {
+            return reportedFmucAddress;
+        }
+
+        @Override
         public void send(Packet packet) {
-            room.send(packet);
+            room.send(packet, this);
         }
 
         @Override
@@ -1909,6 +2403,9 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
      * availability in the room changes. This method should not be called to handle other presence related updates, such
      * as nickname changes.
      * {@inheritDoc}
+     *
+     * @param occupantRole occupant that changed his presence in the room (cannot be {@code null}).
+     * @param newPresence presence sent by the occupant (cannot be {@code null}).
      */
     @Override
     public void presenceUpdated(final MUCRole occupantRole, final Presence newPresence) {
@@ -1931,7 +2428,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         CacheFactory.doClusterTask(clusterUpdateRequest);
 
         // Broadcast updated presence of occupant.
-        broadcastPresence(updatedPresence, false);
+        broadcastPresence(updatedPresence, false, occupantRole);
     }
 
     /**
@@ -2047,10 +2544,11 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         request.run();
 
         // Broadcast new presence of occupant
-        broadcastPresence(occupantRole.getPresence().createCopy(), false);
+        broadcastPresence(occupantRole.getPresence().createCopy(), false, occupantRole);
     }
 
     public void nicknameChanged(ChangeNickname changeNickname) {
+        Log.trace( "Changing nickname for room {}: from {} to {}", getJID(), changeNickname.getOldNick(), changeNickname.getNewNick() );
         lock.writeLock().lock();
         try {
             List<MUCRole> occupants = occupantsByNickname.get(changeNickname.getOldNick().toLowerCase());
@@ -2070,7 +2568,9 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
                 // Remove the old nickname
                 occupantsByNickname.remove(changeNickname.getOldNick().toLowerCase());
             }
-        }finally {
+
+            Log.trace( "Finished changing nickname for room {}: from {} to {}", getJID(), changeNickname.getOldNick(), changeNickname.getNewNick() );
+        } finally {
             lock.writeLock().unlock();
         }
     }
@@ -2084,7 +2584,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
             MUCPersistenceManager.updateRoomSubject(this);
             // Notify all the occupants that the subject has changed
             packet.setFrom(role.getRoleAddress());
-            send(packet);
+            send(packet, role);
 
             // Fire event signifying that the room's subject has changed.
             MUCEventDispatcher.roomSubjectChanged(getJID(), role.getUserAddress(), subject);
@@ -2205,6 +2705,11 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     @Override
+    public FMUCHandler getFmucHandler() {
+        return fmucHandler;
+    }
+
+    @Override
     public MUCRoomHistory getRoomHistory() {
         return roomHistory;
     }
@@ -2300,6 +2805,18 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
             throws NotAllowedException {
         // Update the presence with the new role and inform all occupants
         Presence updatedPresence = changeOccupantRole(jid, MUCRole.Role.none);
+
+        // Determine the role of the actor that initiates the kick.
+        MUCRole sender;
+        if ( actorJID == null ) {
+            sender = getRole(); // originates from the room itself (eg: through admin console changes).
+        } else {
+            sender = occupantsByFullJID.get(actorJID);
+            if ( sender == null ) {
+                sender = getRole();
+            }
+        }
+
         if (updatedPresence != null) {
             Element frag = updatedPresence.getChildElement(
                     "x", "http://jabber.org/protocol/muc#user");
@@ -2315,7 +2832,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
             kickPresence(updatedPresence, actorJID, actorNickname);
 
             //Inform the other occupants that user has been kicked
-            broadcastPresence(updatedPresence, false);
+            broadcastPresence(updatedPresence, false, sender);
         }
         return updatedPresence;
     }
@@ -2345,8 +2862,11 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
                         actor.addAttribute("nick", nick);
                     }
                 }
-                // Send the unavailable presence to the banned user
-                kickedRole.send(kickPresence);
+
+                // Send a defensive copy (to not leak a change to the 'to' address - this is possibly overprotective here,
+                // but we're erring on the side of caution) of the unavailable presence to the banned user.
+                kickedRole.send(kickPresence.createCopy());
+
                 // Remove the occupant from the room's occupants lists
                 OccupantLeftEvent event = new OccupantLeftEvent(this, kickedRole);
                 event.setOriginator(true);
@@ -2500,6 +3020,46 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     @Override
+    public void setFmucEnabled(boolean fmucEnabled) {
+        this.fmucEnabled = fmucEnabled;
+    }
+
+    @Override
+    public boolean isFmucEnabled() {
+        return fmucEnabled;
+    }
+
+    @Override
+    public void setFmucOutboundNode( JID fmucOutboundNode ) {
+        this.fmucOutboundNode = fmucOutboundNode;
+    }
+
+    @Override
+    public JID getFmucOutboundNode() {
+        return fmucOutboundNode;
+    }
+
+    @Override
+    public void setFmucOutboundMode( FMUCMode fmucOutboundMode ) {
+        this.fmucOutboundMode = fmucOutboundMode;
+    }
+
+    @Override
+    public FMUCMode getFmucOutboundMode() {
+        return fmucOutboundMode;
+    }
+
+    @Override
+    public void setFmucInboundNodes( Set<JID> fmucInboundNodes ) {
+        this.fmucInboundNodes = fmucInboundNodes;
+    }
+
+    @Override
+    public Set<JID> getFmucInboundNodes() {
+        return fmucInboundNodes;
+    }
+
+    @Override
     public int getMaxUsers() {
         return maxUsers;
     }
@@ -2565,30 +3125,21 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     @Override
-    public List<String> getRolesToBroadcastPresence() {
+    @Nonnull
+    public List<MUCRole.Role> getRolesToBroadcastPresence() {
         return Collections.unmodifiableList(rolesToBroadcastPresence);
     }
 
     @Override
-    public void setRolesToBroadcastPresence(List<String> rolesToBroadcastPresence) {
+    public void setRolesToBroadcastPresence(@Nonnull final List<MUCRole.Role> rolesToBroadcastPresence) {
         // TODO If the list changes while there are occupants in the room we must send available or
         // unavailable presences of the affected occupants to the rest of the occupants
         this.rolesToBroadcastPresence = rolesToBroadcastPresence;
     }
 
-    /**
-     * Returns true if we need to check whether a presence could be sent or not.
-     *
-     * @return true if we need to check whether a presence could be sent or not.
-     */
-    private boolean hasToCheckRoleToBroadcastPresence() {
-        // For performance reasons the check is done based on the size of the collection.
-        return rolesToBroadcastPresence.size() < 3;
-    }
-
     @Override
-    public boolean canBroadcastPresence(String roleToBroadcast) {
-        return "none".equals(roleToBroadcast) || rolesToBroadcastPresence.contains(roleToBroadcast);
+    public boolean canBroadcastPresence(@Nonnull final MUCRole.Role roleToBroadcast) {
+        return MUCRole.Role.none.equals(roleToBroadcast) || rolesToBroadcastPresence.contains(roleToBroadcast);
     }
 
     @Override
@@ -2732,7 +3283,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         ExternalizableUtil.getInstance().writeSafeUTF(out, description);
         ExternalizableUtil.getInstance().writeBoolean(out, canOccupantsChangeSubject);
         ExternalizableUtil.getInstance().writeInt(out, maxUsers);
-        ExternalizableUtil.getInstance().writeStringList(out, rolesToBroadcastPresence);
+        ExternalizableUtil.getInstance().writeStringList(out, rolesToBroadcastPresence.stream().map(Enum::name).collect(Collectors.toList())); // This uses stringlist for compatibility with Openfire 4.6.0. Can be replaced the next major release.
         ExternalizableUtil.getInstance().writeBoolean(out, publicRoom);
         ExternalizableUtil.getInstance().writeBoolean(out, persistent);
         ExternalizableUtil.getInstance().writeBoolean(out, moderated);
@@ -2744,6 +3295,19 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         ExternalizableUtil.getInstance().writeBoolean(out, loginRestrictedToNickname);
         ExternalizableUtil.getInstance().writeBoolean(out, canChangeNickname);
         ExternalizableUtil.getInstance().writeBoolean(out, registrationEnabled);
+        ExternalizableUtil.getInstance().writeBoolean(out, fmucEnabled);
+        ExternalizableUtil.getInstance().writeBoolean(out, fmucOutboundNode != null);
+        if (fmucOutboundNode != null) {
+            ExternalizableUtil.getInstance().writeSerializable(out, fmucOutboundNode);
+        }
+        ExternalizableUtil.getInstance().writeBoolean(out, fmucOutboundMode != null);
+        if (fmucOutboundMode != null) {
+            ExternalizableUtil.getInstance().writeInt(out, fmucOutboundMode.ordinal());
+        }
+        ExternalizableUtil.getInstance().writeBoolean(out, fmucInboundNodes != null);
+        if (fmucInboundNodes != null) {
+            ExternalizableUtil.getInstance().writeSerializableCollection(out, fmucInboundNodes);
+        }
         ExternalizableUtil.getInstance().writeSafeUTF(out, subject);
         ExternalizableUtil.getInstance().writeLong(out, roomID);
         ExternalizableUtil.getInstance().writeLong(out, creationDate.getTime());
@@ -2772,7 +3336,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         description = ExternalizableUtil.getInstance().readSafeUTF(in);
         canOccupantsChangeSubject = ExternalizableUtil.getInstance().readBoolean(in);
         maxUsers = ExternalizableUtil.getInstance().readInt(in);
-        rolesToBroadcastPresence.addAll(ExternalizableUtil.getInstance().readStringList(in));
+        rolesToBroadcastPresence.addAll(ExternalizableUtil.getInstance().readStringList(in).stream().map(MUCRole.Role::valueOf).collect(Collectors.toSet())); // This uses stringlist for compatibility with Openfire 4.6.0. Can be replaced the next major release.
         publicRoom = ExternalizableUtil.getInstance().readBoolean(in);
         persistent = ExternalizableUtil.getInstance().readBoolean(in);
         moderated = ExternalizableUtil.getInstance().readBoolean(in);
@@ -2784,6 +3348,24 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         loginRestrictedToNickname = ExternalizableUtil.getInstance().readBoolean(in);
         canChangeNickname = ExternalizableUtil.getInstance().readBoolean(in);
         registrationEnabled = ExternalizableUtil.getInstance().readBoolean(in);
+        fmucEnabled = ExternalizableUtil.getInstance().readBoolean(in);
+        if (ExternalizableUtil.getInstance().readBoolean(in)) {
+            fmucOutboundNode = (JID) ExternalizableUtil.getInstance().readSerializable(in);
+        } else {
+            fmucOutboundNode = null;
+        }
+        if (ExternalizableUtil.getInstance().readBoolean(in)) {
+            final int i = ExternalizableUtil.getInstance().readInt(in);
+            fmucOutboundMode = FMUCMode.values()[i];
+        } else {
+            fmucOutboundMode = null;
+        }
+        if (ExternalizableUtil.getInstance().readBoolean(in)) {
+            fmucInboundNodes = new HashSet<>();
+            ExternalizableUtil.getInstance().readSerializableCollection(in, fmucInboundNodes, getClass().getClassLoader());
+        } else {
+            fmucInboundNodes = null;
+        }
         subject = ExternalizableUtil.getInstance().readSafeUTF(in);
         roomID = ExternalizableUtil.getInstance().readLong(in);
         creationDate = new Date(ExternalizableUtil.getInstance().readLong(in));
@@ -2802,6 +3384,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         PacketRouter packetRouter = XMPPServer.getInstance().getPacketRouter();
         this.iqOwnerHandler = new IQOwnerHandler(this, packetRouter);
         this.iqAdminHandler = new IQAdminHandler(this, packetRouter);
+        this.fmucHandler = new FMUCHandler(this, packetRouter);
 
         router = packetRouter;
     }
@@ -2829,6 +3412,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         loginRestrictedToNickname = otherRoom.loginRestrictedToNickname;
         canChangeNickname = otherRoom.canChangeNickname;
         registrationEnabled = otherRoom.registrationEnabled;
+        fmucHandler = otherRoom.fmucHandler;
         subject = otherRoom.subject;
         roomID = otherRoom.roomID;
         creationDate = otherRoom.creationDate;
@@ -2955,7 +3539,7 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     private void applyAffiliationChangeAndSendPresence(JID groupMember) {
         List<Presence> presences = applyAffiliationChange(getRole(), groupMember, null);
         for (Presence presence : presences) {
-            send(presence);
+            send(presence, this.getRole());
         }
     }
 
@@ -2963,6 +3547,4 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     public void groupCreated(Group group, Map params) {
         // ignore
     }
-    
-    
 }

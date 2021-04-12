@@ -23,7 +23,6 @@ import java.util.LinkedList;
 import java.util.ListIterator;
 
 import org.dom4j.Element;
-import org.jivesoftware.openfire.muc.spi.LocalMUCRole;
 import org.jivesoftware.util.XMPPDateTimeFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -135,7 +134,8 @@ public class HistoryRequest {
         if (!isConfigured()) {
             Iterator<Message> history = roomHistory.getMessageHistory();
             while (history.hasNext()) {
-                joinRole.send(history.next());
+                // OF-2163: Create a defensive copy of the message, to prevent the address that it is sent to to leak back into the archive.
+                joinRole.send(history.next().createCopy());
             }
         }
         else {
@@ -195,8 +195,9 @@ public class HistoryRequest {
                 historyToSend.addFirst(message);
             }
             // Send the smallest amount of traffic to the user
-            for (Object aHistoryToSend : historyToSend) {
-                joinRole.send((Message) aHistoryToSend);
+            for (final Message aHistoryToSend : historyToSend) {
+                // OF-2163: Create a defensive copy of the message, to prevent the address that it is sent to to leak back into the archive.
+                joinRole.send(aHistoryToSend.createCopy());
             }
         }
     }

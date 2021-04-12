@@ -18,12 +18,16 @@ package org.jivesoftware.openfire.muc.cluster;
 
 import org.dom4j.Element;
 import org.dom4j.tree.DefaultElement;
+import org.jivesoftware.openfire.muc.MUCRole;
+import org.jivesoftware.openfire.muc.spi.LocalMUCRole;
 import org.jivesoftware.openfire.muc.spi.LocalMUCRoom;
 import org.jivesoftware.util.cache.ExternalizableUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.xmpp.packet.JID;
 import org.xmpp.packet.Presence;
 
+import javax.annotation.Nonnull;
 import java.io.IOException;
 import java.io.ObjectInput;
 import java.io.ObjectOutput;
@@ -41,19 +45,34 @@ public class BroadcastPresenceRequest extends MUCRoomTask<Void> {
 
     private Presence presence;
 
+    private JID userAddressSender;
+
     private boolean isJoinPresence;
 
     public BroadcastPresenceRequest() {
     }
 
-    public BroadcastPresenceRequest(LocalMUCRoom room, Presence message, boolean isJoinPresence) {
+    public BroadcastPresenceRequest(@Nonnull final LocalMUCRoom room, @Nonnull final MUCRole sender, @Nonnull final Presence presence, final boolean isJoinPresence) {
         super(room);
-        this.presence = message;
+        this.userAddressSender = sender.getUserAddress();
+        this.presence = presence;
         this.isJoinPresence = isJoinPresence;
+
+        if (!presence.getFrom().asBareJID().equals(room.getJID())) {
+            // At this point, the 'from' address of the to-be broadcasted stanza can be expected to be the role-address
+            // of the subject, or more broadly: it's bare JID representation should match that of the room. If that's not
+            // the case then there's a bug in Openfire. Catch this here, as otherwise, privacy-sensitive data is leaked.
+            // See: OF-2152
+            throw new IllegalArgumentException("Broadcasted presence stanza's 'from' JID " + presence.getFrom() + " does not match room JID: " + room.getJID());
+        }
     }
 
     public Presence getPresence() {
         return presence;
+    }
+
+    public JID getUserAddressSender() {
+        return userAddressSender;
     }
 
     public boolean isJoinPresence() {
@@ -77,7 +96,7 @@ public class BroadcastPresenceRequest extends MUCRoomTask<Void> {
                 }
                 catch ( Exception e )
                 {
-                    Log.warn( "An unexpected exception occurred while trying to broadcast a presence update from {} in the room {}", presence.getFrom(), getRoom().getJID() );
+                    Log.warn( "An unexpected exception occurred while trying to broadcast a presence update from {} in the room {}", presence.getFrom(), getRoom().getJID(), e );
                 }
             }
         });
@@ -87,6 +106,7 @@ public class BroadcastPresenceRequest extends MUCRoomTask<Void> {
     public void writeExternal(ObjectOutput out) throws IOException {
         super.writeExternal(out);
         ExternalizableUtil.getInstance().writeSerializable(out, (DefaultElement) presence.getElement());
+        ExternalizableUtil.getInstance().writeSerializable(out, userAddressSender);
     }
 
     @Override
@@ -94,5 +114,6 @@ public class BroadcastPresenceRequest extends MUCRoomTask<Void> {
         super.readExternal(in);
         Element packetElement = (Element) ExternalizableUtil.getInstance().readSerializable(in);
         presence = new Presence(packetElement, true);
+        userAddressSender = (JID) ExternalizableUtil.getInstance().readSerializable(in);
     }
 }

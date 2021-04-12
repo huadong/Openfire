@@ -84,7 +84,7 @@ public class OfflineMessageStrategy extends BasicModule implements ServerFeature
             if (recipientJID == null || serverAddress.equals(recipientJID) ||
                     recipientJID.getNode() == null ||
                     message.getExtension("received", "urn:xmpp:carbons:2") != null ||
-                    !UserManager.getInstance().isRegisteredUser(recipientJID.getNode())) {
+                    !UserManager.getInstance().isRegisteredUser(recipientJID, false)) {
                 return;
             }
 
@@ -188,9 +188,9 @@ public class OfflineMessageStrategy extends BasicModule implements ServerFeature
     }
 
     private void store(Message message) {
-        messageStore.addMessage(message);
+        final boolean stored = messageStore.addMessage(message);
         // Inform listeners that an offline message was stored
-        if (!listeners.isEmpty()) {
+        if (stored && !listeners.isEmpty()) {
             for (OfflineMessageListener listener : listeners) {
                 try {
                     listener.messageStored(message);    
@@ -260,7 +260,7 @@ public class OfflineMessageStrategy extends BasicModule implements ServerFeature
                 // http://xmpp.org/extensions/xep-0160.html#disco
                 return Collections.singleton("msgoffline").iterator();
         }
-        return Collections.<String>emptyList().iterator();
+        return Collections.emptyIterator();
     }
 
     /**

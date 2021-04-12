@@ -24,9 +24,11 @@ import org.jivesoftware.openfire.user.UserNotFoundException;
 import org.jivesoftware.util.XMPPDateTimeFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.xml.sax.SAXException;
 import org.xmpp.packet.JID;
 import org.xmpp.packet.Message;
 
+import javax.annotation.Nullable;
 import java.io.StringReader;
 import java.util.Date;
 import java.util.Iterator;
@@ -168,9 +170,8 @@ public final class MUCRoomHistory {
         message.setType(Message.Type.groupchat);
         if (stanza != null) {
             // payload initialized as XML string from DB
-            SAXReader xmlReader = new SAXReader();
-            xmlReader.setEncoding("UTF-8");
             try {
+                SAXReader xmlReader = setupSAXReader();
                 Element element = xmlReader.read(new StringReader(stanza)).getRootElement();
                 for (Element child : (List<Element>)element.elements()) {
                     Namespace ns = child.getNamespace();
@@ -222,6 +223,15 @@ public final class MUCRoomHistory {
         historyStrategy.addMessage(message);
     }
 
+    private SAXReader setupSAXReader() throws SAXException {
+        SAXReader xmlReader = new SAXReader();
+        xmlReader.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        xmlReader.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        xmlReader.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        xmlReader.setEncoding("UTF-8");
+        return xmlReader;
+    }
+
     /**
      * Returns true if there is a message within the history of the room that has changed the
      * room's subject.
@@ -239,6 +249,7 @@ public final class MUCRoomHistory {
      * 
      * @return the latest room subject change or null if none exists yet.
      */
+    @Nullable
     public Message getChangedSubject() {
         return historyStrategy.getChangedSubject();
     }

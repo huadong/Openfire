@@ -17,10 +17,7 @@
 package org.jivesoftware.openfire.http;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import org.apache.jasper.servlet.JasperInitializer;
 import org.apache.tomcat.InstanceManager;
@@ -158,7 +155,7 @@ public final class HttpBindManager implements CertificateEventListener, Property
      * A task that, periodically, updates the 'last modified' date of all files in the Jetty 'tmp' directories. This
      * prevents operating systems from removing files that are deemed unused.
      *
-     * @see <a href="https://issues.igniterealtime.org/browse/OF-1534">OF-1534</a>
+     * @see <a href="https://igniterealtime.atlassian.net/browse/OF-1534">OF-1534</a>
      */
     private TempFileToucherTask tempFileToucherTask;
 
@@ -239,7 +236,27 @@ public final class HttpBindManager implements CertificateEventListener, Property
 
         try {
             httpBindServer.start();
+
+            if (handlerList.getHandlers() != null) {
+                Arrays.stream(handlerList.getHandlers()).forEach(handler -> {
+                    try {
+                        handler.start();
+                    } catch (Exception e) {
+                        Log.warn("An exception occurred while trying to start handler: {}", handler, e);
+                    }
+                });
+            }
             handlerList.start();
+
+            if ( extensionHandlers.getHandlers() != null ) {
+                Arrays.stream(extensionHandlers.getHandlers()).forEach(handler -> {
+                    try {
+                        handler.start();
+                    } catch (Exception e) {
+                        Log.warn("An exception occurred while trying to start extension handler: {}", handler, e);
+                    }
+                });
+            }
             extensionHandlers.start();
 
             CertificateManager.addListener(this);
@@ -267,8 +284,28 @@ public final class HttpBindManager implements CertificateEventListener, Property
 
         if (httpBindServer != null) {
             try {
-                handlerList.stop();
+                if ( extensionHandlers.getHandlers() != null ) {
+                    Arrays.stream(extensionHandlers.getHandlers()).forEach(handler -> {
+                        try {
+                            handler.stop();
+                        } catch (Exception e) {
+                            Log.warn("An exception occurred while trying to stop extension handler: {}", handler, e);
+                        }
+                    });
+                }
                 extensionHandlers.stop();
+
+                if ( handlerList.getHandlers() != null ) {
+                    Arrays.stream(handlerList.getHandlers()).forEach(handler -> {
+                        try {
+                            handler.stop();
+                        } catch (Exception e) {
+                            Log.warn("An exception occurred while trying to stop handler: {}", handler, e);
+                        }
+                    });
+                }
+                handlerList.stop();
+
                 httpBindServer.stop();
                 Log.info("HTTP bind service stopped");
             }
@@ -291,6 +328,7 @@ public final class HttpBindManager implements CertificateEventListener, Property
         final int port = getHttpBindUnsecurePort();
         if (port > 0) {
             HttpConfiguration httpConfig = new HttpConfiguration();
+            httpConfig.setSendServerVersion( false );
             configureProxiedConnector(httpConfig);
             ServerConnector connector = new ServerConnector(httpBindServer, new HttpConnectionFactory(httpConfig));
 
@@ -324,6 +362,7 @@ public final class HttpBindManager implements CertificateEventListener, Property
                 httpsConfig.setSecurePort(securePort);
                 configureProxiedConnector(httpsConfig);
                 httpsConfig.addCustomizer(new SecureRequestCustomizer());
+                httpsConfig.setSendServerVersion( false );
 
                 final ServerConnector sslConnector = new ServerConnector(httpBindServer, new SslConnectionFactory(sslContextFactory, "http/1.1"), new HttpConnectionFactory(httpsConfig));
                 sslConnector.setHost(getBindInterface());
