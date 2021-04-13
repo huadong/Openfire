@@ -93,7 +93,8 @@ class ConversationLogEntry {
     public ConversationLogEntry(MUCRoom room, JID sender, String stanzaID) {
     	this.roomID = room.getID();
     	this.stanzaID = stanzaID;
-    	this.sender = sender;
+    	this.sender = sender.asBareJID();
+    	this.nickname = sender.getResource();
     	this.remove = true;
     	
     	// stuff
@@ -101,7 +102,6 @@ class ConversationLogEntry {
     	this.subject = null;
     	this.body = null;
     	this.stanza = null;
-    	this.nickname = null;
     	this.messageID = -1;
     }
 
