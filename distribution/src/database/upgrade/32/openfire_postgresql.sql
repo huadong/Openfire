@@ -10,5 +10,6 @@ update ofmucconversationlog set stanzaID=SPLIT_PART(stanza, '"', 2) WHERE stanza
 
 CREATE INDEX ofMucConvLog_stanza_id ON ofMucConversationLog (stanzaID);
 CREATE INDEX ofMucConvLog_status ON ofMucConversationLog (status);
+CREATE INDEX ofMucConvLog_nickname ON ofMucConversationLog (nickname);
 
 UPDATE ofVersion SET version = 32 WHERE name = 'openfire';
