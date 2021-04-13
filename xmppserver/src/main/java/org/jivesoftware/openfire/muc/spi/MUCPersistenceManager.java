@@ -143,7 +143,7 @@ public class MUCPersistenceManager {
     private static final String ADD_CONVERSATION_LOG =
         "INSERT INTO ofMucConversationLog (roomID,messageID,sender,nickname,logTime,subject,body,stanza,stanzaID) VALUES (?,?,?,?,?,?,?,?,?)";
     private static final String REMOVE_CONVERSATION_LOG =
-        "UPDATE ofMucConversationLog SET status=1 WHERE roomID=? AND stanzaID=? AND sender=?";
+        "UPDATE ofMucConversationLog SET status=1 WHERE roomID=? AND stanzaID=? AND nickname=?";
 
     /* Map of subdomains to their associated properties */
     private static ConcurrentHashMap<String,MUCServiceProperties> propertyMaps = new ConcurrentHashMap<>();
@@ -1230,7 +1230,7 @@ public class MUCPersistenceManager {
             for(ConversationLogEntry entry : batch) {
                 pstmt.setLong(1, entry.getRoomID());
                 pstmt.setString(2, entry.getStanzaID());
-                pstmt.setString(3, entry.getSender().toString());
+                pstmt.setString(3, entry.getNickname());
                 pstmt.addBatch();
             }
 
