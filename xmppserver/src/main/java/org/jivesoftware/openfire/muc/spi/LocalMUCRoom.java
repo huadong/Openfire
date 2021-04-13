@@ -1746,6 +1746,21 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         }
         mucService.messageBroadcastedTo(messageRequest.getOccupants());
     }
+    
+	/**
+	 * remove history Message by fromJID and stanzaId.
+	 * 
+	 * @param fromJID {@link Message#getFrom()}
+	 * @param stanzaId {@link Message#getID()}
+	 */
+	public void removeMessage(JID fromJID, String stanzaId) {
+		// remove message from history
+		roomHistory.removeMessage(fromJID, stanzaId);
+		
+		// remove the conversation
+        mucService.removeConversation(this, fromJID, stanzaId);
+		
+	}
 
     /**
      * Based on XEP-0045, section 7.2.13:

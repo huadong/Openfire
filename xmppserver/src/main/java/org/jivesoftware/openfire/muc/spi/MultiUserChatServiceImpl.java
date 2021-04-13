@@ -80,6 +80,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -672,8 +673,20 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
             {
                 return;
             }
+            
+            LinkedList<ConversationLogEntry> removes = new LinkedList<>();
+            batch.removeIf( p -> {
+            	if (p.isRemove()) {
+            		removes.add(p);
+            		return true;
+            	}
+            	return false;
+            });
 
             MUCPersistenceManager.saveConversationLogBatch( batch );
+            if (!removes.isEmpty()) {
+            	MUCPersistenceManager.removeConversationLog( removes );
+            }
         }
     }
 
@@ -1623,6 +1636,14 @@ public class MultiUserChatServiceImpl implements Component, MultiUserChatService
         // Only log messages that have a subject or body. Otherwise ignore it.
         if (message.getSubject() != null || message.getBody() != null) {
             getArchiver().archive( new ConversationLogEntry( new Date(), room, message, sender) );
+        }
+    }
+    
+    @Override
+    public void removeConversation(final MUCRoom room, JID fromJID, String stanzaId) {
+    	// Only remove messages that have a stanzaId. Otherwise ignore it.
+        if (stanzaId != null) {
+            getArchiver().archive( new ConversationLogEntry( room, fromJID, stanzaId ) );
         }
     }
 

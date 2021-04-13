@@ -49,6 +49,10 @@ class ConversationLogEntry {
     private final long roomID;
 
     private final long messageID;
+    
+    private final String stanzaID;
+    
+    private final boolean remove;
 
     /**
      * Creates a new ConversationLogEntry that registers that a given message was sent to a given
@@ -67,6 +71,8 @@ class ConversationLogEntry {
         this.sender = sender;
         this.roomID = room.getID();
         this.nickname = message.getFrom().getResource();
+        this.stanzaID = message.getID();
+        this.remove = false;
 
         // OF-2157: It is important to assign a message ID, which is used for ordering messages in a conversation, soon
         // after the message arrived, as opposed to just before the message gets written to the database. In the latter
@@ -75,6 +81,28 @@ class ConversationLogEntry {
         // database-insertion order (as compared to the order of messages in the conversation) on a single Openfire
         // server, but when running in a cluster, these batches do have a good chance to mess up the order of things.
         this.messageID = SequenceManager.nextID(JiveConstants.MUC_MESSAGE_ID);
+    }
+    
+    /**
+     * Creates a ConversationLogEntry that will be removed from database
+     * 
+     * @param room the room that received the message.
+     * @param sender the real XMPPAddress of the sender (e.g. john@example.org). 
+     * @param stanzaID the ID of {@link Message#getID()}
+     */
+    public ConversationLogEntry(MUCRoom room, JID sender, String stanzaID) {
+    	this.roomID = room.getID();
+    	this.stanzaID = stanzaID;
+    	this.sender = sender;
+    	this.remove = true;
+    	
+    	// stuff
+    	this.date = null;
+    	this.subject = null;
+    	this.body = null;
+    	this.stanza = null;
+    	this.nickname = null;
+    	this.messageID = -1;
     }
 
     /**
@@ -137,7 +165,7 @@ class ConversationLogEntry {
      * @return string representation of the stanza.
      */
     public String getStanza() { return stanza; }
-
+    
     /**
      * Returns the unique ID of the message in the conversation.
      *
@@ -148,4 +176,24 @@ class ConversationLogEntry {
     public long getMessageID() {
         return messageID;
     }
+    
+    /**
+     * Returns the ID of the message stanza in the conversation.
+     * 
+     * This ID is used to identify the message of the {@link #getSender()}.
+     * 
+     * @return the ID of the message stanza, {@link Message#getID()}
+     */
+    public String getStanzaID() {
+		return stanzaID;
+	}
+    
+    /**
+     * Returns the message will be removed from or saved to the database
+     * 
+     * @return true, the message will be removed from database. or will be saved to database.
+     */
+    public boolean isRemove() {
+		return remove;
+	}
 }

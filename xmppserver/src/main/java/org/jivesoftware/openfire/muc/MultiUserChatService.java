@@ -465,6 +465,16 @@ public interface MultiUserChatService extends Component {
      */
     void logConversation(MUCRoom room, Message message, JID sender);
 
+	/**
+	 * remove history Message by fromJID and stanzaId.
+	 * remove operation from database will be merged to {@link #logConversation(MUCRoom, Message, JID)}
+	 * 
+	 * @param room the room that received the message.
+	 * @param fromJID {@link Message#getFrom()}
+	 * @param stanzaId {@link Message#getID()}
+	 */
+	void removeConversation(MUCRoom room, JID fromJID, String stanzaId);
+	
     /**
      * Notification message indicating the server that an incoming message was broadcasted
      * to a given number of occupants.
