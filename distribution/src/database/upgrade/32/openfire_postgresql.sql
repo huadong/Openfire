@@ -2,6 +2,8 @@ ALTER TABLE ofMucRoom ADD COLUMN fmucEnabled INTEGER NULL;
 ALTER TABLE ofMucRoom ADD COLUMN fmucOutboundNode TEXT NULL;
 ALTER TABLE ofMucRoom ADD COLUMN fmucOutboundMode INTEGER NULL;
 ALTER TABLE ofMucRoom ADD COLUMN fmucInboundNodes TEXT NULL;
+ALTER TABLE ofmucroom CHANGE COLUMN subject subject TEXT NULL DEFAULT NULL;
+ALTER TABLE ofmucconversationlog CHANGE COLUMN subject subject TEXT NULL DEFAULT NULL;
 ALTER TABLE ofmucconversationlog ADD COLUMN stanzaID TEXT NULL;
 ALTER TABLE ofmucconversationlog ADD COLUMN status INTEGER DEFAULT 0;
 
