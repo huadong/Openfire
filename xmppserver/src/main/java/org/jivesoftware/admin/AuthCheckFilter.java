@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2004-2008 Jive Software. All rights reserved.
+ * Copyright (C) 2004-2008 Jive Software, 2022-2023 Ignite Realtime Foundation. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,9 @@
 package org.jivesoftware.admin;
 
 import java.io.IOException;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Set;
 import java.util.StringTokenizer;
@@ -55,6 +57,15 @@ public class AuthCheckFilter implements Filter {
         .setDefaultValue(null)
         .setDynamic(true)
         .addListener(AuthCheckFilter::initAuthenticator)
+        .build();
+
+    /**
+     * Controls whether wildcards are allowed in URLs that are excluded from auth checks.
+     */
+    public static final SystemProperty<Boolean> ALLOW_WILDCARDS_IN_EXCLUDES = SystemProperty.Builder.ofType(Boolean.class)
+        .setKey("adminConsole.access.allow-wildcards-in-excludes")
+        .setDefaultValue(false)
+        .setDynamic(true)
         .build();
 
     private static ServletRequestAuthenticator servletRequestAuthenticator;
@@ -149,16 +160,24 @@ public class AuthCheckFilter implements Filter {
      * @return true if the URL passes the exclude test.
      */
     public static boolean testURLPassesExclude(String url, String exclude) {
+        // If the url doesn't decode to UTF-8 then return false, it could be trying to get around our rules with nonstandard encoding
         // If the exclude rule includes a "?" character, the url must exactly match the exclude rule.
         // If the exclude rule does not contain the "?" character, we chop off everything starting at the first "?"
         // in the URL and then the resulting url must exactly match the exclude rule. If the exclude ends with a "*"
-        // character then the URL is allowed if it exactly matches everything before the * and there are no ".."
-        // characters after the "*". All data in the URL before
+        // (wildcard) character, and wildcards are allowed in excludes, then the URL is allowed if it exactly
+        // matches everything before the * and there are no ".." characters after the "*".
 
-        if (exclude.endsWith("*")) {
+        String decodedUrl = null;
+        try {
+            decodedUrl = URLDecoder.decode(url, "UTF-8");
+        } catch (Exception e) {
+            return false;        
+        }
+
+        if (exclude.endsWith("*") && ALLOW_WILDCARDS_IN_EXCLUDES.getValue()) {
             if (url.startsWith(exclude.substring(0, exclude.length()-1))) {
                 // Now make sure that there are no ".." characters in the rest of the URL.
-                if (!url.contains("..") && !url.toLowerCase().contains("%2e")) {
+                if (!decodedUrl.contains("..")) {
                     return true;
                 }
             }
@@ -189,7 +208,7 @@ public class AuthCheckFilter implements Filter {
             StringTokenizer tokenizer = new StringTokenizer(excludesProp, ",");
             while (tokenizer.hasMoreTokens()) {
                 String tok = tokenizer.nextToken().trim();
-                excludes.add(tok);
+                addExclude(tok);
             }
         }
     }
@@ -260,6 +279,8 @@ public class AuthCheckFilter implements Filter {
 
     @Override
     public void destroy() {
+        // reset excludes to an empty set to prevent state carry over
+        excludes = Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
     }
 
     private String getRedirectURL(HttpServletRequest request, String loginPage,
@@ -285,4 +306,10 @@ public class AuthCheckFilter implements Filter {
             return null;
         }
     }
+
+    public static void loadSetupExcludes() {
+        Arrays.stream(JiveGlobals.setupExcludePaths).forEach(AuthCheckFilter::addExclude);
+    }
+
+
 }

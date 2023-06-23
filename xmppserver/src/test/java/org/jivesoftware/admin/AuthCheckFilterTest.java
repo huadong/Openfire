@@ -59,8 +59,6 @@ public class AuthCheckFilterTest {
 
     }
 
-    // login.jsp,index.jsp?logout=true,setup/index.jsp,setup/setup-,.gif,.png,error-serverdown.jsp
-
     @Test
     public void testExcludeRules() {
         assertFalse(AuthCheckFilter.testURLPassesExclude("blahblah/login.jsp", "login.jsp"));
@@ -72,12 +70,35 @@ public class AuthCheckFilterTest {
         assertFalse(AuthCheckFilter.testURLPassesExclude("login.jsp?logout=false&another=true", "login.jsp?logout=false"));
         assertFalse(AuthCheckFilter.testURLPassesExclude("login.jsp?logout=false&another=true", "login.jsp?logout=false"));
 
-        assertFalse(AuthCheckFilter.testURLPassesExclude("setup/setup-/../../log.jsp?log=info&mode=asc&lines=All","setup/setup-*"));
-        assertFalse(AuthCheckFilter.testURLPassesExclude("setup/setup-/%2E/%2E/log.jsp?log=info&mode=asc&lines=All","setup/setup-*"));
-
-        assertTrue(AuthCheckFilter.testURLPassesExclude("setup/setup-new.jsp","setup/setup-*"));
-
         assertFalse(AuthCheckFilter.testURLPassesExclude("another.jsp?login.jsp", "login.jsp"));
+    }
+
+    @Test
+    public void wildcardInExcludePassesWhenWildcardsAllowed() throws Exception {
+        AuthCheckFilter.ALLOW_WILDCARDS_IN_EXCLUDES.setValue(true);
+        assertTrue(AuthCheckFilter.testURLPassesExclude("setup/setup-new.jsp","setup/setup-*"));
+    }
+
+    @Test
+    public void wildcardInExcludeBlockedWhenWildcardsNotAllowed() throws Exception {
+        AuthCheckFilter.ALLOW_WILDCARDS_IN_EXCLUDES.setValue(false);
+        assertFalse(AuthCheckFilter.testURLPassesExclude("setup/setup-new.jsp","setup/setup-*"));
+    }
+
+    @Test
+    public void pathTraversalDetectedWhenWildcardsAllowed() throws Exception {
+        AuthCheckFilter.ALLOW_WILDCARDS_IN_EXCLUDES.setValue(true);
+        assertFalse(AuthCheckFilter.testURLPassesExclude("setup/setup-/../../log.jsp?log=info&mode=asc&lines=All","setup/setup-*"));
+        assertFalse(AuthCheckFilter.testURLPassesExclude("setup/setup-/%2E%2E/%2E%2E/log.jsp?log=info&mode=asc&lines=All","setup/setup-*"));
+        assertFalse(AuthCheckFilter.testURLPassesExclude("setup/setup-s/%u002e%u002e/%u002e%u002e/log.jsp?log=info&mode=asc&lines=All", "setup/setup-*"));
+    }
+
+    @Test
+    public void pathTraversalDetectedWhenWildcardsNotAllowed() throws Exception {
+        AuthCheckFilter.ALLOW_WILDCARDS_IN_EXCLUDES.setValue(false);
+        assertFalse(AuthCheckFilter.testURLPassesExclude("setup/setup-/../../log.jsp?log=info&mode=asc&lines=All","setup/setup-*"));
+        assertFalse(AuthCheckFilter.testURLPassesExclude("setup/setup-/%2E%2E/%2E%2E/log.jsp?log=info&mode=asc&lines=All","setup/setup-*"));
+        assertFalse(AuthCheckFilter.testURLPassesExclude("setup/setup-s/%u002e%u002e/%u002e%u002e/log.jsp?log=info&mode=asc&lines=All", "setup/setup-*"));
     }
 
     @Test

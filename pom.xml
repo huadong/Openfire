@@ -4,7 +4,7 @@
 
     <groupId>org.igniterealtime.openfire</groupId>
     <artifactId>parent</artifactId>
-    <version>4.6.2.zhuyin</version>
+    <version>4.6.8.zhuyin</version>
     <name>Parent</name>
     <packaging>pom</packaging>
 
@@ -405,23 +405,11 @@
 
     <distributionManagement>
         <!-- Repository in which we deploy this project, when desired. -->
-        <!--
         <repository>
             <id>igniterealtime</id>
             <name>Ignite Realtime Repository</name>
             <url>https://www.igniterealtime.org/archiva/repository/maven/</url>
         </repository>
-        -->
-        <repository>
-            <id>maven-repository-inner</id>
-            <name>maven-repository-inner</name>
-            <url>https://maven2.xhcms.com/content/repositories/releases/</url>
-        </repository>
-        <snapshotRepository>
-            <id>maven-repository-inner</id>
-            <name>maven-repository-inner</name>
-            <url>https://maven2.xhcms.com/content/repositories/snapshots/</url>
-        </snapshotRepository>
     </distributionManagement>
 
     <repositories>

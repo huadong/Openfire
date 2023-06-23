@@ -1520,7 +1520,8 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
 
         if (!canBroadcastPresence(sender.getRole())) {
             // Just send the presence to the sender of the presence
-            sender.send(stanza);
+            final Presence selfPresence = createSelfPresenceCopy(new BroadcastPresenceRequest(this, sender, stanza, isJoinPresence));
+            sender.send(selfPresence);
             return CompletableFuture.completedFuture(null);
         }
 
@@ -2887,7 +2888,10 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
 
                 // Send a defensive copy (to not leak a change to the 'to' address - this is possibly overprotective here,
                 // but we're erring on the side of caution) of the unavailable presence to the banned user.
-                kickedRole.send(kickPresence.createCopy());
+                Presence kickSelfPresence = kickPresence.createCopy();
+                Element fragKickSelfPresence = kickSelfPresence.getChildElement("x", "http://jabber.org/protocol/muc#user");
+                fragKickSelfPresence.addElement("status").addAttribute("code", "110");
+                kickedRole.send(kickSelfPresence);
 
                 // Remove the occupant from the room's occupants lists
                 OccupantLeftEvent event = new OccupantLeftEvent(this, kickedRole);

@@ -22,14 +22,19 @@ import org.jivesoftware.openfire.archive.Archiver;
 import org.jivesoftware.openfire.handler.IQHandler;
 import org.jivesoftware.openfire.muc.spi.LocalMUCRoom;
 import org.jivesoftware.openfire.muc.spi.MUCPersistenceManager;
+import org.jivesoftware.openfire.muc.spi.MUCRoomSearchInfo;
 import org.jivesoftware.util.JiveConstants;
 import org.xmpp.component.Component;
 import org.xmpp.packet.JID;
 import org.xmpp.packet.Message;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Manages groupchat conversations, chatrooms, and users. This class is designed to operate
@@ -188,40 +193,68 @@ public interface MultiUserChatService extends Component {
     void removeUsersAllowedToCreate(Collection<JID> userJIDs);
 
     /**
-     * Sets the time to elapse between clearing of idle chat users. A <code>TimerTask</code> will be
-     * added to a <code>Timer</code> scheduled for repeated fixed-delay execution whose main
-     * responsibility is to kick users that have been idle for a certain time. A user is considered
-     * idle if he/she didn't send any message to any group chat room for a certain amount of time.
-     * See {@link #setUserIdleTime(int)}.
+     * Sets the period of the fixed-delay execution of tasks by the <code>Timer</code> whose main responsibility is
+     * to process users that have been idle for a certain time. A user is considered idle if he/she didn't send any
+     * message to any group chat room for a certain amount of time.
      *
-     * @param timeout the time to elapse between clearing of idle chat users.
+     * @param duration The fixed-delay interval in which idle checks need to be performed.
+     * @see #getIdleUserKickThreshold()
+     * @see #getIdleUserPingThreshold()
      */
-    void setKickIdleUsersTimeout(int timeout);
+    void setIdleUserTaskInterval(final @Nonnull Duration duration);
 
     /**
-     * Returns the time to elapse between clearing of idle chat users. A user is considered
-     * idle if he/she didn't send any message to any group chat room for a certain amount of time.
-     * See {@link #getUserIdleTime()}.
+     * Returns the period of fixed-delay executions of tasks that operate on idle users.
      *
-     * @return the time to elapse between clearing of idle chat users.
+     * @return The fixed-delay interval in which idle checks need to be performed.
      */
-    int getKickIdleUsersTimeout();
+    @Nonnull Duration getIdleUserTaskInterval();
 
     /**
-     * Sets the number of milliseconds a user must be idle before he/she gets kicked from all
+     * Sets the duration that a user must be idle before he/she gets kicked from all
      * the rooms. By idle we mean that the user didn't send any message to any group chat room.
      *
-     * @param idle the amount of time to wait before considering a user idle.
+     * Set to null to disable the feature.
+     *
+     * @param duration the amount of time to wait before considering a user idle.
      */
-    void setUserIdleTime(int idle);
+    void setIdleUserKickThreshold(final @Nullable Duration duration);
 
     /**
-     * Returns the number of milliseconds a user must be idle before he/she gets kicked from all
+     * Returns the duration that a user must be idle before he/she gets kicked from all
      * the rooms. By idle we mean that the user didn't send any message to any group chat room.
+     *
+     * Returns null if the feature is disabled.
      *
      * @return the amount of time to wait before considering a user idle.
      */
-    int getUserIdleTime();
+    @Nullable
+    Duration getIdleUserKickThreshold();
+
+    /**
+     * Sets the duration that a user must be idle before he/she gets pinged by the room, to
+     * determine if the user is a 'ghost user'.
+     *
+     * By idle we mean that the user didn't send any message to any group chat room.
+     *
+     * Set to null to disable the feature.
+     *
+     * @param duration the amount of time to wait before considering a user idle.
+     */
+    void setIdleUserPingThreshold(final @Nullable Duration duration);
+
+    /**
+     * Returns the duration that a user must be idle before he/she gets pinged by the rooms that they're an occupant
+     * of (to determine if they're a 'ghost user').
+     *
+     * By idle we mean that the user didn't send any message to any group chat room.
+     *
+     * Returns null if the feature is disabled.
+     *
+     * @return the amount of time to wait before considering a user idle.
+     */
+    @Nullable
+    Duration getIdleUserPingThreshold();
 
     /**
      * Sets the time to elapse between logging the room conversations. A <code>TimerTask</code> will
@@ -353,12 +386,48 @@ public interface MultiUserChatService extends Component {
     void refreshChatRoom(String roomName);
     
     /**
-     * Retuns a list with a snapshot of all the rooms in the server (i.e. persistent or not,
-     * in memory or not).
+     * Returns a list with a snapshot of all the rooms in the server that are loaded in memory.
+     *
+     * Note: up to release 4.6.4 this method was documented to return all the rooms in the server (i.e. persistent or not,
+     * in memory or not). The implementation did not do this, although that behavior had been in place for years.
+     * To avoid future confusion, the method is deprecated, keeping the existing behavior. Replacements have been added
+     * that will return the data as defined in their contract
      *
      * @return a list with a snapshot of all the rooms.
+     * @deprecated replaced by getActiveChatRooms() and getAllRoomNames()
      */
+    @Deprecated // Remove in Openfire 4.7 or later.
     List<MUCRoom> getChatRooms();
+
+    /**
+     * Returns a list with a snapshot of all the rooms in the server that are actively loaded in memory.
+     *
+     * @return a list with a snapshot of rooms.
+     */
+    default List<MUCRoom> getActiveChatRooms() {
+        return getChatRooms(); // Openfire prior to v4.6.4 returned inMemory rooms only.
+    }
+
+    /**
+     * Returns a list of names of all the rooms in the server (i.e. persistent or not, in memory or not).
+     *
+     * @return All room names
+     */
+    default Set<String> getAllRoomNames() {
+        // This implementation is wrong, as it won't include names for rooms that are not actively in memory. This
+        // corresponds to the default behavior prior to release v4.6.4. As a fallback (to not break API), it that's
+        // deemed 'acceptable'. This default implementation should be removed (leaving just the interface signature
+        // in place) in or after Openfire 4.7.
+        return getChatRooms().stream().map(MUCRoom::getName).collect(Collectors.toSet());
+    }
+
+    default Collection<MUCRoomSearchInfo> getAllRoomSearchInfo() {
+        // This implementation is wrong, as it won't include names for rooms that are not actively in memory. This
+        // corresponds to the default behavior prior to release v4.6.4. As a fallback (to not break API), it that's
+        // deemed 'acceptable'. This default implementation should be removed (leaving just the interface signature
+        // in place) in or after Openfire 4.7.
+        return getChatRooms().stream().map(MUCRoomSearchInfo::new).collect(Collectors.toList());
+    }
 
     /**
      * Returns true if the server includes a chatroom with the requested name.
