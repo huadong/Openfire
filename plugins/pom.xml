@@ -370,13 +370,25 @@
         </dependency>
     </dependencies>
 
+<!--    <distributionManagement>-->
+<!--        &lt;!&ndash; Repository in which we deploy this project, when desired. &ndash;&gt;-->
+<!--        <repository>-->
+<!--            <id>igniterealtime</id>-->
+<!--            <name>Ignite Realtime Repository</name>-->
+<!--            <url>https://www.igniterealtime.org/archiva/repository/maven/</url>-->
+<!--        </repository>-->
+<!--    </distributionManagement>-->
     <distributionManagement>
-        <!-- Repository in which we deploy this project, when desired. -->
         <repository>
-            <id>igniterealtime</id>
-            <name>Ignite Realtime Repository</name>
-            <url>https://www.igniterealtime.org/archiva/repository/maven/</url>
+            <id>maven-repository-inner</id>
+            <name>maven-repository-inner</name>
+            <url>https://maven2.xhcms.com/content/repositories/releases/</url>
         </repository>
+        <snapshotRepository>
+            <id>maven-repository-inner</id>
+            <name>maven-repository-inner</name>
+            <url>https://maven2.xhcms.com/content/repositories/snapshots/</url>
+        </snapshotRepository>
     </distributionManagement>
 
     <repositories>
